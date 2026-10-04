@@ -1,0 +1,123 @@
+/* Tonpo Web — premium dark trading UI */
+
+:root {
+  --sidebar-w: 16rem;
+}
+
+* { box-sizing: border-box; }
+
+body { overflow-x: hidden; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #94a3b8;
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+.nav-item:hover {
+  background: #1c2538;
+  color: #e2e8f0;
+}
+.nav-item.active {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.card {
+  background: #0f1520;
+  border: 1px solid #1c2538;
+  border-radius: 1rem;
+  padding: 1.25rem;
+}
+.card-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+}
+.card-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', monospace;
+}
+.card-sub {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 0.25rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.badge-green { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.25); }
+.badge-red { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.25); }
+.badge-blue { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
+.badge-yellow { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.25); }
+.badge-gray { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
+
+.table-wrap { overflow-x: auto; border-radius: 0.75rem; border: 1px solid #1c2538; }
+table.data { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+table.data th {
+  text-align: right;
+  padding: 0.75rem 1rem;
+  background: #151c2c;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #1c2538;
+  white-space: nowrap;
+}
+table.data td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #151c2c;
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+}
+table.data tr:last-child td { border-bottom: none; }
+table.data tr:hover td { background: rgba(28,37,56,0.5); }
+
+.skeleton {
+  background: linear-gradient(90deg, #151c2c 25%, #1c2538 50%, #151c2c 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 0.5rem;
+  height: 1.25rem;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: #64748b;
+}
+.empty-state svg { margin: 0 auto 1rem; opacity: 0.4; }
+
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Mobile sidebar open */
+#sidebar.open { transform: translateX(0); }
+#sidebar-overlay.open { display: block; }

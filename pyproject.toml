@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=67.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fx-signal-copier"
+version = "2.0.0"
+description = "Telegram Bot for MetaTrader 5 Trading"
+readme = "README.md"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+keywords = ["forex", "trading", "telegram", "bot", "metatrader"]
+requires-python = ">=3.10"
+dependencies = [
+    "python-telegram-bot>=22.6",
+    "tonpo==1.0.4",
+    "aiohttp>=3.9",
+    "sqlalchemy>=2.0.46",
+    "alembic>=1.18.4",
+    "psycopg2-binary>=2.9.11",
+    "redis>=5.2.1",
+    "celery>=5.4.0",
+    "prettytable>=3.10.0",
+    "humanize>=4.10.0",
+    "psutil>=6.0.0",
+    "PyJWT>=2.13.0",
+    "cryptography>=43.0.0",
+    "python-dotenv>=1.0.1",
+    "pydantic>=2.7.4",
+    "pydantic==2.14.0b2 ; platform_system == 'Android' and python_version == '3.14' and platform_machine == 'aarch64'",
+    "pydantic-settings",
+    "pydantic-core @ https://github.com/Eutalix/android-pydantic-core/releases/download/v2.49.0/pydantic_core-2.49.0-cp314-cp314-android_24_arm64_v8a.whl#sha256=589040efddcd1f5fc521256fbc448a4adda31000fc42942c5e3313e42b4ac2c6 ; platform_system == 'Android' and python_version == '3.14' and platform_machine == 'aarch64'",
+    "fastapi>=0.115.0",
+]
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bot*", "config*", "core*", "database*", "gateway_client*", "services*", "utils*"]
+
+[project.scripts]
+fx-bot = "main:main"
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = [
+    "tests",
+]
+markers = [
+    "asyncio: mark test as async",
+]
+
+[tool.coverage.run]
+source = ["fx_signal_copier"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

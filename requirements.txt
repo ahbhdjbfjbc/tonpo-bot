@@ -1,0 +1,55 @@
+# Core dependencies
+python-telegram-bot==22.6
+sqlalchemy==2.0.46
+alembic==1.18.4
+psycopg2-binary>=2.9.11
+redis==5.2.1
+celery==5.4.0
+
+# pandas and numpy are not imported by the application; omitting them avoids
+# unnecessary native builds on Android.
+prettytable==3.10.0
+humanize==4.10.0
+
+# Security
+cryptography>=46.0.7
+python-jose==3.4.0
+passlib==1.7.4
+python-dotenv==1.0.1
+pydantic>=2.7.4
+# The Android wheel below is pydantic-core 2.49.0; pair it with the matching
+# Pydantic release on Termux CPython 3.14/aarch64.
+pydantic==2.14.0b2 ; platform_system == "Android" and python_version == "3.14" and platform_machine == "aarch64"
+# PyPI does not publish Android wheels for pydantic-core. Use the matching
+# Termux CPython 3.14/aarch64 build instead of attempting a Rust source build.
+pydantic-core @ https://github.com/Eutalix/android-pydantic-core/releases/download/v2.49.0/pydantic_core-2.49.0-cp314-cp314-android_24_arm64_v8a.whl#sha256=589040efddcd1f5fc521256fbc448a4adda31000fc42942c5e3313e42b4ac2c6 ; platform_system == "Android" and python_version == "3.14" and platform_machine == "aarch64"
+email-validator==2.2.0
+phonenumbers==8.13.40
+
+# Monitoring
+sentry-sdk==2.8.0
+prometheus-client==0.21.0
+psutil>=6.0.0
+
+# Scheduling
+apscheduler==3.10.4
+
+# Testing
+pytest==8.3.2
+pytest-asyncio==0.24.0
+pytest-cov==5.0.0
+
+# Utilities
+click==8.1.8
+colorama==0.4.6
+tqdm==4.67.1
+pydantic-settings
+PyJWT==2.13.0
+
+# gateway-client
+tonpo==1.0.4
+aiohttp>=3.9
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+slowapi>=0.1.9

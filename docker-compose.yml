@@ -1,0 +1,85 @@
+# Tonpo Bot + Web platform
+# Secrets MUST come from environment / .env — never commit real values here.
+# Required env vars: BOT_TOKEN, JWT_SECRET, DATABASE_URL (or POSTGRES_*), TRADINGVIEW_WEBHOOK_SECRET, ENCRYPTION_KEY
+# TRADING_DRY_RUN must remain true unless you explicitly override it in your local .env
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fx_signal_copier}
+      POSTGRES_USER: ${POSTGRES_USER:-fxuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fxuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  tonpo-bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TRADING_DRY_RUN: ${TRADING_DRY_RUN:-true}
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    command: ["python", "main.py"]
+
+  tonpo-web:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TRADING_DRY_RUN: ${TRADING_DRY_RUN:-true}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8000"
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    command: ["python", "-m", "web.run"]
+
+volumes:
+  postgres_data:
+  redis_data:

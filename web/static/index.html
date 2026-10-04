@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tonpo — Trading Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: { 900: '#0a0e17', 800: '#0f1520', 700: '#151c2c', 600: '#1c2538', 500: '#243044' },
+            accent: { DEFAULT: '#3b82f6', soft: '#1d4ed8', glow: '#60a5fa' },
+            profit: '#22c55e', loss: '#ef4444', warn: '#f59e0b',
+          },
+          fontFamily: {
+            sans: ['IBM Plex Sans Arabic', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="bg-surface-900 text-slate-200 font-sans antialiased min-h-screen">
+  <!-- Login Overlay -->
+  <div id="login-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-surface-900">
+    <div class="w-full max-w-md mx-4">
+      <div class="text-center mb-8">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-accent/20 border border-accent/30 mb-4">
+          <svg class="w-8 h-8 text-accent-glow" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+        </div>
+        <h1 class="text-2xl font-bold text-white tracking-tight">Tonpo Trading</h1>
+        <p class="text-slate-400 mt-1 text-sm">منصة التداول الاحترافية</p>
+      </div>
+      <div class="bg-surface-800 border border-surface-600 rounded-2xl p-6 shadow-2xl">
+        <form id="login-form" class="space-y-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Telegram ID</label>
+            <input id="login-telegram-id" type="number" required
+              class="w-full bg-surface-700 border border-surface-600 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent"
+              placeholder="123456789" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">API Key</label>
+            <input id="login-api-key" type="password" required
+              class="w-full bg-surface-700 border border-surface-600 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent font-mono"
+              placeholder="••••••••••••" />
+          </div>
+          <div id="login-error" class="hidden text-loss text-sm bg-loss/10 border border-loss/20 rounded-lg px-3 py-2"></div>
+          <button type="submit" id="login-btn"
+            class="w-full bg-accent hover:bg-accent-soft text-white font-semibold rounded-xl py-3 transition-colors disabled:opacity-50">
+            تسجيل الدخول
+          </button>
+        </form>
+        <p class="text-xs text-slate-500 mt-4 text-center">احصل على API Key من بوت تليجرام ← الإعدادات</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div id="app" class="hidden min-h-screen flex">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="fixed inset-y-0 right-0 z-40 w-64 bg-surface-800 border-l border-surface-600 transform translate-x-full md:translate-x-0 transition-transform duration-200 flex flex-col">
+      <div class="p-5 border-b border-surface-600">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl bg-accent/20 flex items-center justify-center">
+            <svg class="w-5 h-5 text-accent-glow" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+          </div>
+          <div>
+            <div class="font-semibold text-white text-sm">Tonpo</div>
+            <div class="text-[10px] text-slate-500 uppercase tracking-wider">Trading Platform</div>
+          </div>
+        </div>
+      </div>
+      <nav class="flex-1 p-3 space-y-0.5 overflow-y-auto" id="nav">
+        <a href="#dashboard" data-page="dashboard" class="nav-item active">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>
+          لوحة التحكم
+        </a>
+        <a href="#signals" data-page="signals" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          الإشارات
+        </a>
+        <a href="#trades" data-page="trades" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          الصفقات
+        </a>
+        <a href="#mt5" data-page="mt5" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+          MT5
+        </a>
+        <a href="#risk" data-page="risk" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          المخاطر
+        </a>
+        <a href="#support" data-page="support" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+          الدعم
+        </a>
+        <a href="#settings" data-page="settings" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          الإعدادات
+        </a>
+        <div class="pt-3 mt-3 border-t border-surface-600">
+          <a href="#admin" data-page="admin" class="nav-item" id="nav-admin">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            الإدارة
+          </a>
+        </div>
+      </nav>
+      <div class="p-4 border-t border-surface-600">
+        <div id="sidebar-user" class="text-xs text-slate-400 mb-2 truncate"></div>
+        <button id="logout-btn" class="w-full text-sm text-slate-400 hover:text-white py-2 rounded-lg hover:bg-surface-700 transition-colors">
+          تسجيل الخروج
+        </button>
+      </div>
+    </aside>
+
+    <!-- Mobile overlay -->
+    <div id="sidebar-overlay" class="fixed inset-0 bg-black/60 z-30 hidden md:hidden"></div>
+
+    <!-- Main -->
+    <div class="flex-1 md:mr-64 flex flex-col min-h-screen">
+      <!-- Top bar -->
+      <header class="sticky top-0 z-20 bg-surface-900/80 backdrop-blur-xl border-b border-surface-600">
+        <div class="flex items-center justify-between px-4 md:px-6 h-14">
+          <div class="flex items-center gap-3">
+            <button id="menu-btn" class="md:hidden p-2 rounded-lg hover:bg-surface-700 text-slate-400">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <h2 id="page-title" class="text-sm font-semibold text-white">لوحة التحكم</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            <div id="dry-run-badge" class="hidden items-center gap-1.5 px-2.5 py-1 rounded-full bg-warn/15 border border-warn/30 text-warn text-[11px] font-medium">
+              <span class="w-1.5 h-1.5 rounded-full bg-warn animate-pulse"></span>
+              DRY RUN
+            </div>
+            <div id="conn-badge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-700 border border-surface-600 text-[11px] text-slate-400">
+              <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+              <span id="conn-label">—</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Content -->
+      <main id="content" class="flex-1 p-4 md:p-6 overflow-y-auto">
+        <!-- Pages injected by JS -->
+      </main>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+
+  <!-- Tonpo AI Assistant -->
+  <button id="ai-fab" type="button" title="AI Assistant"
+    class="fixed bottom-5 left-5 z-50 w-14 h-14 rounded-full bg-accent-500 text-white shadow-lg hover:bg-accent-400 flex items-center justify-center text-xl font-bold">
+    AI
+  </button>
+  <div id="ai-panel" class="hidden fixed bottom-24 left-5 z-50 w-[min(100vw-2rem,380px)] max-h-[70vh] flex flex-col rounded-2xl border border-surface-600 bg-surface-800 shadow-2xl">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-surface-600">
+      <div>
+        <div class="text-sm font-semibold text-white">Tonpo AI Assistant</div>
+        <div class="text-xs text-slate-400">معلم / Guide — لا ينفذ صفقات</div>
+      </div>
+      <div class="flex gap-2 items-center">
+        <select id="ai-lang" class="bg-surface-700 text-xs rounded-lg px-2 py-1 text-slate-200 border border-surface-600">
+          <option value="ar">العربية</option>
+          <option value="en">English</option>
+        </select>
+        <button type="button" id="ai-close" class="text-slate-400 hover:text-white text-lg px-2">×</button>
+      </div>
+    </div>
+    <div id="ai-quick" class="px-3 py-2 flex flex-wrap gap-1.5 border-b border-surface-600 max-h-24 overflow-y-auto"></div>
+    <div id="ai-messages" class="flex-1 overflow-y-auto p-3 space-y-2 text-sm min-h-[180px]"></div>
+    <form id="ai-form" class="p-3 border-t border-surface-600 flex gap-2">
+      <input id="ai-input" type="text" maxlength="2000" placeholder="اسأل..."
+        class="flex-1 bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-accent-500" />
+      <button type="submit" class="px-4 py-2 rounded-xl bg-accent-500 text-white text-sm font-medium hover:bg-accent-400">إرسال</button>
+    </form>
+  </div>
+
+</body>
+</html>
