@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 
+import jwt
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/tonpo_ai_test.db")
@@ -44,6 +46,35 @@ def test_assistant_requires_auth():
     from web.app import app
     with TestClient(app) as c:
         r = c.post("/api/assistant/chat", json={"message": "hi"})
+        assert r.status_code == 401
+
+
+def test_assistant_rejects_malformed_token():
+    from fastapi.testclient import TestClient
+    from web.app import app
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/assistant/chat",
+            headers={"Authorization": "Bearer not-a-jwt"},
+            json={"message": "hi"},
+        )
+        assert r.status_code == 401
+
+
+def test_assistant_rejects_expired_token():
+    from fastapi.testclient import TestClient
+    from web.app import app
+    token = jwt.encode(
+        {"user_id": 1, "exp": datetime.now(timezone.utc) - timedelta(seconds=1)},
+        os.environ["JWT_SECRET"],
+        algorithm="HS256",
+    )
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/assistant/chat",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"message": "hi"},
+        )
         assert r.status_code == 401
 
 

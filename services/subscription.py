@@ -12,6 +12,8 @@ from core.exceptions import SubscriptionError
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TRIAL_DAYS = 3
+
 class SubscriptionService:
     """
     Manages user subscriptions and plan limits
@@ -190,95 +192,17 @@ class SubscriptionService:
             user.last_trade_date = datetime.utcnow()
             self.db.commit()
     
-    def upgrade_user(self, user_id: int, plan_tier: str, 
+    def upgrade_user(self, user_id: int, plan_tier: str,
                     billing_period: str = 'monthly',
-                    payment_method: str = 'crypto', 
+                    payment_method: str = 'crypto',
                     payment_id: str = '',
                     tx_hash: str = '') -> Dict[str, Any]:
-        """
-        Upgrade user to a new plan.
-        
-        Args:
-            billing_period: 'monthly' or 'yearly'
-        """
+        """Deprecated user-facing activation path; admin approval is required."""
         user = self.user_repo.get_by_telegram_id(user_id)
         if not user:
             raise SubscriptionError("User not found")
-        
-        plan = self.get_purchase_plan(plan_tier)
-        if not plan:
-            raise SubscriptionError(f"Plan {plan_tier} not found")
-        
-        # Calculate duration based on billing period
-        if billing_period == 'yearly':
-            duration_days = 365
-            amount = float(plan.price_yearly)
-        else:
-            duration_days = 30
-            amount = float(plan.price_monthly)
-        
-        # Update user
-        old_plan = user.subscription_tier
-        user.subscription_tier = plan_tier
-        user.subscription_expiry = datetime.utcnow() + timedelta(days=duration_days)
-        
-        # Append to payment history (persisted JSON column)
-        if user.payment_history is None:
-            user.payment_history = []
-        
-        # SQLAlchemy won't detect in-place mutation of JSON — copy, modify, reassign
-        history = list(user.payment_history)
-        history.append({
-            'date': datetime.utcnow().isoformat(),
-            'plan': plan_tier,
-            'billing_period': billing_period,
-            'amount': amount,
-            'currency': plan.currency or 'USD',
-            'method': payment_method,
-            'payment_id': payment_id,
-            'tx_hash': tx_hash
-        })
-        user.payment_history = history
-        
-        self.db.commit()
-        
-        # Cache plan features on user for quick access
-        referral_attribution = (user.subscription_features or {}).get('referral_attribution')
-        user.subscription_features = {
-            'max_trades': plan.max_trades_per_day,
-            'max_position_size': float(plan.max_position_size),
-            'max_symbols': plan.max_symbols,
-            'multiple_tps': plan.supports_multiple_tps,
-            'auto_trading': plan.supports_auto_trading,
-            'api_access': plan.supports_api,
-            'max_connections': plan.max_connections,
-            'rate_limit': plan.rate_limit_per_second,
-            'support_priority': plan.support_priority,
-        }
-        if referral_attribution:
-            user.subscription_features['referral_attribution'] = referral_attribution
-        self.db.commit()
-        
-        logger.info(f"User {user_id} upgraded from {old_plan} to {plan_tier} ({billing_period})")
-        
-        return {
-            'success': True,
-            'user_id': user_id,
-            'old_plan': old_plan,
-            'new_plan': plan_tier,
-            'billing_period': billing_period,
-            'duration_days': duration_days,
-            'amount': amount,
-            'expiry': user.subscription_expiry.isoformat(),
-            'features': {
-                'max_trades': plan.max_trades_per_day,
-                'max_position_size': plan.max_position_size,
-                'multiple_tps': plan.supports_multiple_tps,
-                'auto_trading': plan.supports_auto_trading,
-                'api_access': plan.supports_api
-            }
-        }
-    
+        raise SubscriptionError("Subscription activation is admin-controlled")
+
     def downgrade_user(self, user_id: int, reason: str = "expired") -> Dict[str, Any]:
         """Downgrade user to free plan"""
         user = self.user_repo.get_by_telegram_id(user_id)
@@ -379,7 +303,7 @@ class SubscriptionService:
     				except Exception as notify_err:
     					logger.error(f"Failed to notify user {user.telegram_id} of expiry: {notify_err}")
     		except Exception as e:
-    			logger.error(f"Failed to downgrade user {user.telegram_id}: {e}")
+                    logger.error("Failed to downgrade user %s (%s)", user.telegram_id, type(e).__name__)
     	
     	return count
     
@@ -448,8 +372,17 @@ class SubscriptionService:
             'supports_api': plan.supports_api,
             'support_priority': plan.support_priority,
             'max_connections': plan.max_connections,
+            'is_active': plan.is_active,
+            'is_visible': plan.is_visible,
+            'trial_eligible': plan.trial_eligible,
+            'display_order': plan.display_order,
             'features': plan.features or []
         }
+
+    def public_plan_catalog(self) -> List[Dict[str, Any]]:
+        """Return active, visible plan metadata without payment secrets."""
+        plans = sorted(self.get_all_plans(), key=lambda item: item.display_order)
+        return [self.get_plan_features(plan.tier) for plan in plans]
 
 
 class TrialService:
@@ -461,9 +394,11 @@ class TrialService:
         self.db = db_session
         self.sub_service = SubscriptionService(db_session)
     
-    def start_trial(self, user_id: int, days: int = 14) -> Dict[str, Any]:
+    def start_trial(self, user_id: int, days: int = DEFAULT_TRIAL_DAYS) -> Dict[str, Any]:
         """Start a free trial for a user"""
-        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        # Lock the authoritative user row so two concurrent requests cannot
+        # both observe trial_used=False and grant two trials.
+        user = self.db.query(User).filter(User.telegram_id == user_id).with_for_update().first()
         if not user:
             raise SubscriptionError("User not found")
         
@@ -492,6 +427,26 @@ class TrialService:
             'features': self.sub_service.get_plan_features('pro')
         }
     
+    def get_trial_status(self, user_id: int) -> Dict[str, Any]:
+        """Return server-authoritative, timezone-naive UTC trial state."""
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        if not user:
+            return {"status": "UNAVAILABLE", "active": False, "remaining_seconds": 0}
+        now = datetime.utcnow()
+        if not user.trial_used or not user.trial_end:
+            return {"status": "NOT_STARTED", "active": False, "remaining_seconds": 0, "ends_at": None}
+        remaining = max(0, int((user.trial_end - now).total_seconds()))
+        active = remaining > 0
+        return {
+            "status": "ACTIVE" if active else "EXPIRED",
+            "active": active,
+            "remaining_seconds": remaining,
+            "remaining_days": round(remaining / 86400, 2),
+            "started_at": user.trial_start.isoformat() if user.trial_start else None,
+            "ends_at": user.trial_end.isoformat(),
+            "trial_days": DEFAULT_TRIAL_DAYS,
+        }
+
     def check_trial_eligibility(self, user_id: int) -> Dict[str, Any]:
         """Check if user is eligible for a trial"""
         user = self.db.query(User).filter(User.telegram_id == user_id).first()
@@ -508,6 +463,6 @@ class TrialService:
         
         return {
             'eligible': True,
-            'trial_days': 14,
+            'trial_days': DEFAULT_TRIAL_DAYS,
             'features': self.sub_service.get_plan_features('pro')
         }

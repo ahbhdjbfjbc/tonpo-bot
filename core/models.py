@@ -1,7 +1,7 @@
 # fx/core/models.py
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import json
 import math
@@ -16,7 +16,7 @@ class UnifiedSignal:
     payload: str
     user_id: Optional[int] = None
     external_id: Optional[str] = None
-    received_at: datetime = field(default_factory=datetime.utcnow)
+    received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

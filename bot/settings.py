@@ -427,46 +427,54 @@ class SettingsHandler:
         return MAIN_MENU
     
     async def _test_connection(self, update: Update, context: CallbackContext):
-        """Test MT5 connection via gateway"""
+        """Test MT5 connection via gateway without exposing provider details."""
         user_id = context.user_data['settings_user_id']
         try:
-        	if not self.execution_provider:
-        		raise RuntimeError("Gateway not available")
-        	await self.execution_provider.get_connection(user_id)
-        	await context.bot.send_message(chat_id=user_id, text="✅ تم اختبار الاتصال بنجاح!")
-        except Exception as e:
-        	await context.bot.send_message(
-        	    chat_id=user_id,
-        	    text=f"❌ Connection test failed: {str(e)[:100]}"
-        	)
-    
+            if not self.execution_provider:
+                raise RuntimeError("Gateway not available")
+            await self.execution_provider.get_connection(user_id)
+            await context.bot.send_message(chat_id=user_id, text="✅ تم اختبار الاتصال بنجاح!")
+        except Exception as exc:
+            logger.warning('Connection test failed for user %s (%s)', user_id, type(exc).__name__)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text='❌ Connection test failed. Check the gateway status and try again.'
+            )
+
     async def _update_credentials(self, update, context, account, password, server):
-        """Update MT5 credentials"""
+        """Update MT5 credentials without returning upstream exception details."""
         user_id = context.user_data['settings_user_id']
         try:
-        	if not self.execution_provider:
-        		raise RuntimeError("Gateway not available")
-        	success, message, creds = await self.execution_provider.register_user(
-        	    telegram_id=user_id,
-        	    mt5_account=account,
-        	    mt5_password=password,
-        	    mt5_server=server
-        	)
-        	if success:
-        		self.user_repo.update_user(
-        		    user_id,
-        		    mt5_account_id=account,
-        		    mt5_server=server,
-        		    gateway_api_key=creds.get('gateway_api_key'),
-        		    gateway_user_id=creds.get('gateway_user_id')
-        		)
-        		await context.bot.send_message(chat_id=user_id, text="✅ تم تحديث بيانات الدخول بنجاح!")
-        	else:
-        		await context.bot.send_message(chat_id=user_id, text=f"❌ تعذر التحديث: {message}")
-        
-        except Exception as e:
-        	await context.bot.send_message(chat_id=user_id, text=f"❌ تعذر التحديث: {str(e)[:100]}")
-    
+            if not self.execution_provider:
+                raise RuntimeError("Gateway not available")
+            success, message, creds = await self.execution_provider.register_user(
+                telegram_id=user_id,
+                mt5_account=account,
+                mt5_password=password,
+                mt5_server=server
+            )
+            if success:
+                from services.auth import encrypt_gateway_api_key
+                self.user_repo.update_user(
+                    user_id,
+                    mt5_account_id=account,
+                    mt5_server=server,
+                    gateway_api_key=encrypt_gateway_api_key(creds.get('gateway_api_key')),
+                    gateway_user_id=creds.get('gateway_user_id')
+                )
+                await context.bot.send_message(chat_id=user_id, text="✅ تم تحديث بيانات الدخول بنجاح!")
+            else:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text='❌ تعذر تحديث بيانات الدخول. يرجى المحاولة لاحقًا.'
+                )
+        except Exception as exc:
+            logger.warning('Credential update failed for user %s (%s)', user_id, type(exc).__name__)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text='❌ تعذر تحديث بيانات الدخول. يرجى المحاولة لاحقًا.'
+            )
+
     def _format_settings_summary(self, user) -> str:
         """Format settings summary for display"""
         settings = self.settings_repo.get_by_telegram_id(user.telegram_id)

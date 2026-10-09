@@ -1,7 +1,17 @@
 # fx/bot/keyboards.py
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from typing import List, Dict, Any, Optional
 from config.settings import settings
+
+
+def get_mini_app_keyboard() -> Optional[InlineKeyboardMarkup]:
+    """Return the configured Telegram Web App launcher, if provisioned."""
+    url = getattr(settings, 'WEB_APP_URL', None)
+    if not url:
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('📱 فتح Tonpo', web_app=WebAppInfo(url=url))
+    ]])
 
 
 def get_confirmation_keyboard() -> InlineKeyboardMarkup:

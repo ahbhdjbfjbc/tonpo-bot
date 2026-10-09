@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
+import math
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -14,6 +15,11 @@ class LoginRequest(BaseModel):
     api_key: Optional[str] = None
     # Development / bot-linked login: one-time code issued by Telegram bot
     login_code: Optional[str] = None
+
+
+class TelegramWebAppLoginRequest(BaseModel):
+    """Raw Telegram Web App initData; user identity is inside signed data."""
+    init_data: str = Field(min_length=1, max_length=4096)
 
 
 class TokenResponse(BaseModel):
@@ -27,6 +33,8 @@ class TokenResponse(BaseModel):
 
 class TradingViewSignalSchema(BaseModel):
     """Canonical schema for TradingView webhook payloads."""
+    model_config = ConfigDict(extra="forbid")
+
     symbol: str
     action: str  # BUY / SELL
     entry: Optional[float] = None
@@ -39,7 +47,27 @@ class TradingViewSignalSchema(BaseModel):
     source: Optional[str] = None
     id: Optional[str] = None
     signal_id: Optional[str] = None
-    user_id: int  # target telegram user id
+
+    @field_validator("entry", "stop_loss", mode="before")
+    @classmethod
+    def finite_price(cls, v):
+        if v is None:
+            return v
+        value = float(v)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("price must be finite and positive")
+        return value
+
+    @field_validator("take_profit", "take_profits", mode="before")
+    @classmethod
+    def finite_targets(cls, v):
+        if v is None:
+            return v
+        values = v if isinstance(v, list) else [v]
+        parsed = [float(item) for item in values]
+        if not parsed or any(not math.isfinite(item) or item <= 0 for item in parsed):
+            raise ValueError("take profit must contain finite positive prices")
+        return parsed if isinstance(v, list) else parsed[0]
 
     @field_validator("action")
     @classmethod
@@ -130,6 +158,13 @@ class RiskSettingsOut(BaseModel):
     allowed_symbols: Optional[List[str]] = None
     blocked_symbols: Optional[List[str]] = None
     max_spread: Optional[float] = None
+    max_slippage: Optional[float] = None
+    max_volatility: Optional[float] = None
+    session_start_utc: Optional[str] = None
+    session_end_utc: Optional[str] = None
+    max_daily_loss: Optional[float] = None
+    max_consecutive_losses: Optional[int] = None
+    protection_enabled: bool = True
     dry_run: bool = True
 
 

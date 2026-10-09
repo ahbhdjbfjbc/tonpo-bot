@@ -282,6 +282,17 @@ class RiskEngine:
         """
         Calculate all trade metrics
         """
+        # Compatibility facade: executable sizing is canonical in RiskService.
+        # Keep this public legacy API while preventing a second production
+        # implementation from drifting away from the execution path.
+        from services.risk_service import RiskService
+        return RiskService().calculate_trade(
+            signal=signal,
+            balance=balance,
+            risk_factor=risk_factor,
+            user_settings=user_settings,
+        )
+
         # Determine risk factor
         risk = risk_factor or self.default_risk
         

@@ -6,7 +6,7 @@ from telegram.ext import ConversationHandler, CallbackContext, MessageHandler, f
 from sqlalchemy.orm import Session
 
 from database.repositories import UserRepository
-from services.auth import AuthService, EncryptionService
+from services.auth import AuthService
 #from services.mt5_manager import MT5ConnectionManager
 # MT5ConnectionManager removed — gateway handles MT5 connections now
 from services.notification import NotificationService
@@ -26,7 +26,7 @@ class RegistrationHandler:
         self.bot = bot
         self.user_repo = UserRepository(db_session)
         self.auth_service = AuthService(db_session)
-        self.encryption = EncryptionService()
+        self._pending_passwords = {}
         
         # Initialize execution provider
         self.execution_provider = None  # injected by main.py after startup
@@ -39,10 +39,14 @@ class RegistrationHandler:
     async def start(self, update: Update, context: CallbackContext) -> int:
         """Start the registration process"""
         user = update.effective_user
+        if not hasattr(self, '_pending_passwords'):
+            self._pending_passwords = {}
+        self._pending_passwords.pop(user.id, None)
 
         # Clear interrupted form data without dropping a /start referral.
         pending_referrer_id = context.user_data.get('pending_referrer_telegram_id')
         context.user_data.clear()
+        context.user_data.pop('mt5_password', None)
         if pending_referrer_id is not None:
             context.user_data['pending_referrer_telegram_id'] = pending_referrer_id
 
@@ -62,7 +66,7 @@ class RegistrationHandler:
             "🚀 *لنبدأ إعداد حسابك!*\n\n"
             "نحتاج إلى بيانات MetaTrader 5 لربط حسابك.\n\n"
             "⚠️ *تنبيه مهم:*\n"
-            "• ستُشفّر كلمة المرور وتُخزّن بأمان\n"
+            "• لن تُحفظ كلمة مرور MT5 في قاعدة بيانات البوت\n"
             "• ننصح بالبدء بحساب تجريبي\n"
             "• يمكنك تغيير البيانات لاحقًا من /settings\n\n"
             "أدخل **معرّف حساب MT5** (رقم الدخول):"
@@ -85,7 +89,7 @@ class RegistrationHandler:
         await update.message.reply_text(
             "✅ تم استلام معرّف الحساب.\n\n"
             "أدخل الآن **كلمة مرور MT5**:\n"
-            "_(ستُشفّر كلمة المرور)_",
+            "_(لن تُحفظ في قاعدة بيانات البوت)_",
             parse_mode=ParseMode.MARKDOWN
         )
         return ENTER_PASSWORD
@@ -100,7 +104,8 @@ class RegistrationHandler:
             await update.message.reply_text(f"❌ {error}\nيرجى المحاولة مجددًا:")
             return ENTER_PASSWORD
         
-        context.user_data['mt5_password'] = password
+        self._pending_passwords[update.effective_user.id] = password
+        context.user_data.pop('mt5_password', None)
         await update.message.reply_text(
             "✅ تم استلام كلمة المرور.\n\n"
             "أدخل أخيرًا **اسم خادم MT5**:\n"
@@ -120,14 +125,18 @@ class RegistrationHandler:
         
         context.user_data['mt5_server'] = server
         
-        # Show confirmation
+        # The password stays in handler memory and is never put in persistent user_data.
+        if update.effective_user.id not in self._pending_passwords:
+            await update.message.reply_text('انتهت صلاحية كلمة المرور. أعد إدخالها من /register.')
+            return ENTER_PASSWORD
+
         from bot.keyboards import get_confirmation_keyboard
-        
+
         confirm_text = (
             "*يرجى تأكيد بيانات الدخول:*\n\n"
             f"معرّف الحساب: `{context.user_data['mt5_account']}`\n"
             f"الخادم: {server}\n"
-            f"كلمة المرور: {'•' * len(context.user_data['mt5_password'])}\n\n"
+            "كلمة المرور: ••••••••\n\n"
             "هل هذه البيانات صحيحة؟"
         )
         
@@ -153,6 +162,8 @@ class RegistrationHandler:
             # Start verification
             return await self._verify_credentials(update, context)
         else:
+            self._pending_passwords.pop(update.effective_user.id, None)
+            context.user_data.pop('mt5_password', None)
             await query.edit_message_text(
                 "❌ تم إلغاء التسجيل. استخدم /register للبدء من جديد."
             )
@@ -163,10 +174,15 @@ class RegistrationHandler:
         user_id = update.effective_user.id
         query = update.callback_query
         
-        # Pull from memory — will be wiped immediately after use
-        account  = context.user_data.pop('mt5_account')
-        password = context.user_data.pop('mt5_password')
-        server   = context.user_data.pop('mt5_server')
+        # Pull the password from non-persistent handler memory and consume it once.
+        password = self._pending_passwords.pop(user_id, None)
+        context.user_data.pop('mt5_password', None)
+        if not password:
+            await query.edit_message_text('انتهت صلاحية كلمة المرور. أعد التسجيل من /register.')
+            context.user_data.clear()
+            return ConversationHandler.END
+        account = context.user_data.pop('mt5_account')
+        server = context.user_data.pop('mt5_server')
         
         try:
                 if not self.execution_provider:
@@ -179,14 +195,17 @@ class RegistrationHandler:
                     mt5_password=password,
                     mt5_server=server,
                 )
-                # Wipe from memory immediately — CMG owns them now
-                del account, password, server
+                # The password is no longer needed after the provider call.
+                # Account/server identifiers are non-secret routing metadata
+                # needed to persist the connection record below.
+                del password
                 
                 if not success:
                         raise RuntimeError(message)
                 
                 # Bot only stores the routing keys
-                gateway_api_key    = creds['gateway_api_key']
+                from services.auth import encrypt_gateway_api_key
+                gateway_api_key    = encrypt_gateway_api_key(creds['gateway_api_key'])
                 gateway_account_id = creds['gateway_account_id']
                 
                 existing = self.user_repo.get_by_telegram_id(user_id)
@@ -195,6 +214,9 @@ class RegistrationHandler:
                             user_id,
                             is_verified=True,
                             mt_connected=True,
+                            mt5_account_id=account,
+                            mt5_server=server,
+                            gateway_user_id=creds['gateway_user_id'],
                             gateway_api_key=gateway_api_key,
                             gateway_account_id=gateway_account_id,
                         )
@@ -211,6 +233,9 @@ class RegistrationHandler:
                             'last_name': update.effective_user.last_name,
                             'is_verified': True,
                             'mt_connected': True,
+                            'mt5_account_id': account,
+                            'mt5_server': server,
+                            'gateway_user_id': creds['gateway_user_id'],
                             'gateway_api_key': gateway_api_key,
                             'gateway_account_id': gateway_account_id,
                         }
@@ -241,6 +266,7 @@ class RegistrationHandler:
                 try:
                         self.user_repo.update_user(
                             user_id,
+                            gateway_user_id=None,
                             gateway_api_key=None,
                             gateway_account_id=None,
                             is_verified=False,
@@ -291,6 +317,8 @@ class RegistrationHandler:
         self.user_repo.update_user(user_id, default_risk_factor=risk)
         
         # Clear sensitive data
+        self._pending_passwords.pop(update.effective_user.id, None)
+        context.user_data.pop('mt5_password', None)
         context.user_data.clear()
         
         # Send completion message
@@ -318,6 +346,8 @@ class RegistrationHandler:
         )
         
         # Clear any stored data
+        self._pending_passwords.pop(update.effective_user.id, None)
+        context.user_data.pop('mt5_password', None)
         context.user_data.clear()
         
         return ConversationHandler.END

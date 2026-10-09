@@ -30,9 +30,9 @@ class User(Base):
     last_name = Column(String(100))
     language_code = Column(String(10), default='ar', server_default='ar')
     
-    # MetaTrader credentials (encrypted at application level)
+    # Legacy MT5 credential columns retained for schema compatibility.
     mt5_account_id = Column(String(50), nullable=True)
-    # MT5 passwords are forwarded to Tonpo and deliberately never persisted here.
+    # Current registration forwards passwords to Tonpo and does not persist them.
     mt5_password = Column(Text, nullable=True)
     mt5_server = Column(String(100), nullable=True)
     metaapi_token = Column(Text, nullable=True)  # Optional personal token
@@ -47,6 +47,9 @@ class User(Base):
     
     # CMG Gateway credentials (persist across restarts)
     gateway_user_id = Column(String(64), nullable=True, index=True)
+    # Present in migration 008; retained here so ORM/runtime restoration uses
+    # the same persisted account identifier as GatewayManager.
+    gateway_account_id = Column(String(64), nullable=True, index=True)
     gateway_api_key = Column(Text, nullable=True)
     
     # Trading preferences
@@ -139,9 +142,14 @@ class User(Base):
     def is_live_trading(self) -> bool:
         return (self.trading_mode or 'demo').lower() == 'live'
 
+    @property
     def has_gateway_credentials(self) -> bool:
-    	"""Check if user has stored gateway credentials"""
-    	return self.gateway_user_id is not None and self.gateway_api_key is not None
+        """Whether the minimum gateway credential pair is configured."""
+        return bool(
+            self.gateway_user_id
+            and self.gateway_api_key
+            and self.gateway_api_key.startswith('fernet:v1:')
+        )
     
     @property
     def win_rate(self) -> float:
@@ -179,6 +187,17 @@ class UserSettings(Base):
     # Trade filters
     min_distance_from_price = Column(Integer, default=0)  # Minimum pips from current price
     max_spread = Column(Float, default=None, nullable=True)  # Maximum allowed spread
+    max_slippage = Column(Float, default=None, nullable=True)
+    max_volatility = Column(Float, default=None, nullable=True)
+    session_start_utc = Column(String(5), default=None, nullable=True)
+    session_end_utc = Column(String(5), default=None, nullable=True)
+    max_daily_loss = Column(Float, default=None, nullable=True)
+    max_drawdown_pct = Column(Float, default=None, nullable=True)
+    max_open_positions = Column(Integer, default=None, nullable=True)
+    max_open_trades = Column(Integer, default=None, nullable=True)
+    peak_equity = Column(Float, default=None, nullable=True)
+    max_consecutive_losses = Column(Integer, default=None, nullable=True)
+    protection_enabled = Column(Boolean, default=True, nullable=False, server_default='true')
     
     # Display preferences
     decimal_places = Column(Integer, default=2)
@@ -310,6 +329,7 @@ class Notification(Base):
     title = Column(String(200), nullable=False)
     message = Column(Text, nullable=False)
     data = Column(JSON, default=dict)  # Additional data
+    event_key = Column(String(160), nullable=True, index=True)
     
     # Delivery
     is_read = Column(Boolean, default=False)
@@ -403,6 +423,18 @@ class SubscriptionPlan(Base):
         self.features = features
 
     @property
+    def trial_eligible(self) -> bool:
+        return bool(self._admin_metadata().get("trial_eligible", self.tier != "free"))
+
+    @trial_eligible.setter
+    def trial_eligible(self, value: bool):
+        features = self._feature_dict()
+        metadata = dict(features.get("_admin", {}))
+        metadata["trial_eligible"] = bool(value)
+        features["_admin"] = metadata
+        self.features = features
+
+    @property
     def display_order(self) -> int:
         return int(self._admin_metadata().get('display_order', 0))
 
@@ -433,19 +465,23 @@ class PaymentRequest(Base):
     wallet_address = Column(String(100), nullable=False)
     network = Column(String(20), nullable=False)  # 'ERC20' or 'BTC'
     
-    # Status: pending → confirmed → activated | expired | failed
+    # Status: pending → submitted → approved | rejected | expired
     status = Column(String(20), nullable=False, default='pending')
     
-    # Blockchain verification
+    # User-submitted proof is untrusted until an admin reviews it.
     tx_hash = Column(String(100), nullable=True)
     confirmed_amount = Column(Numeric(12, 6), nullable=True)
     confirmations = Column(Integer, default=0)
     block_number = Column(BigInteger, nullable=True)
     
-    # Timing
+    # Timing and manual review audit metadata
     expires_at = Column(DateTime, nullable=False)
     confirmed_at = Column(DateTime, nullable=True)
     activated_at = Column(DateTime, nullable=True)
+    proof_submitted_at = Column(DateTime, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(BigInteger, nullable=True)
+    rejection_reason = Column(String(255), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     
     # Relationships
@@ -455,6 +491,13 @@ class PaymentRequest(Base):
         Index('idx_payment_status', 'status'),
         Index('idx_payment_unique_amount', 'unique_amount', 'currency', 'status'),
         Index('idx_payment_expires', 'expires_at', 'status'),
+        Index(
+            'uq_payment_network_tx_hash',
+            'network', 'tx_hash',
+            unique=True,
+            postgresql_where=tx_hash.isnot(None),
+            sqlite_where=tx_hash.isnot(None),
+        ),
     )
     
     @property
@@ -530,6 +573,21 @@ class SignalReceipt(Base):
     idempotency_key = Column(String(64), nullable=False)
     signal_text = Column(Text, nullable=False)
     status = Column(String(24), nullable=False, default='received')
+    rejection_reason = Column(String(255), nullable=True)
+    news_status = Column(String(24), nullable=True)
+    validation_status = Column(String(24), nullable=True)
+    risk_status = Column(String(24), nullable=True)
+    final_decision = Column(String(32), nullable=True)
+    risk_reason = Column(String(255), nullable=True)
+    protection_reason = Column(String(255), nullable=True)
+    signal_id = Column(String(180), nullable=True, index=True)
+    account_id = Column(String(64), nullable=True, index=True)
+    direction = Column(String(16), nullable=True)
+    entry_price = Column(Numeric(20, 5), nullable=True)
+    stop_loss = Column(Numeric(20, 5), nullable=True)
+    take_profits = Column(JSON, nullable=True)
+    signal_timestamp = Column(DateTime, nullable=True)
+    execution_latency_ms = Column(Float, nullable=True)
     trade_uuid = Column(String(36), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, onupdate=func.now())
@@ -630,6 +688,41 @@ class SupportMessage(Base):
     sender_role = Column(String(20), nullable=False)
     message = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class Announcement(Base):
+    """Admin-authored announcement configuration; never stores secrets."""
+    __tablename__ = "announcements"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(160), nullable=False)
+    message = Column(Text, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    audience = Column(JSON, nullable=True)
+    starts_at = Column(DateTime, nullable=True)
+    ends_at = Column(DateTime, nullable=True)
+    created_by = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class AnnouncementDelivery(Base):
+    """Persistent at-most-once claim for one user and announcement cycle."""
+    __tablename__ = "announcement_deliveries"
+
+    id = Column(Integer, primary_key=True)
+    announcement_id = Column(Integer, ForeignKey("announcements.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    cycle_key = Column(String(40), nullable=False)
+    status = Column(String(20), nullable=False, default="reserved", server_default="reserved")
+    attempted_at = Column(DateTime, nullable=False, server_default=func.now())
+    delivered_at = Column(DateTime, nullable=True)
+    error_code = Column(String(80), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("announcement_id", "user_id", "cycle_key", name="uq_announcement_delivery_cycle"),
+        Index("ix_announcement_delivery_cycle", "cycle_key"),
+    )
 
 
 class AdminSetting(Base):

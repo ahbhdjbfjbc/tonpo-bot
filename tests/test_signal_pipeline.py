@@ -89,8 +89,10 @@ def test_pipeline_persists_idempotency_and_blocks_execution_in_dry_run(monkeypat
         db.commit()
 
         class Executor:
+            calls = 0
             async def execute_trade(self, *args, **kwargs):
-                raise AssertionError('dry-run must not invoke the executor')
+                self.calls += 1
+                return {'success': False, 'status': 'dry_run', 'error': 'Trading is disabled in dry-run mode'}
 
         signal = UnifiedSignal(source='manual', user_id=user.telegram_id,
                                payload='BUY EURUSD\nEntry 1.0800\nSL 1.0700\nTP1 1.0900')
@@ -128,6 +130,7 @@ def test_pipeline_persists_idempotency_and_blocks_execution_in_dry_run(monkeypat
         second = asyncio.run(pipeline.process(signal, confirmed=True))
         assert first['status'] == 'dry_run'
         assert second['status'] == 'duplicate'
+        assert pipeline.executor.calls == 2
         assert db.query(SignalReceipt).count() == 4
     finally:
         db.close()

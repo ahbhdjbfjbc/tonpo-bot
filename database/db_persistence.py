@@ -22,6 +22,27 @@ _USER_KEY   = "user_data"
 _CHAT_KEY   = "chat_data"
 _BOT_KEY    = "bot_data"
 _CALLBACK_KEY = "callback_data"
+_SENSITIVE_USER_DATA_KEYS = frozenset({
+    'password', 'mt5_password', 'secret', 'webhook_secret',
+    'token', 'access_token', 'refresh_token', 'session_token',
+    'api_key', 'gateway_api_key', 'apikey', 'credential', 'credentials',
+    'private_key', 'privatekey', 'jwt', 'jwt_token',
+})
+
+
+def _sanitize_user_data(value: Any) -> Any:
+    """Prevent credentials accidentally placed in Telegram user_data being persisted."""
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_user_data(item)
+            for key, item in value.items()
+            if str(key).lower().replace('-', '_') not in _SENSITIVE_USER_DATA_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_user_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_user_data(item) for item in value)
+    return value
 
 
 def _get_db() -> Session:
@@ -36,7 +57,7 @@ def _load(key: str) -> Any:
             return json.loads(row.value)
         return None
     except Exception as e:
-        logger.error(f"DBPersistence load error for key={key}: {e}")
+        logger.error("DBPersistence load error for key=%s (%s)", key, type(e).__name__)
         return None
     finally:
         db.close()
@@ -54,7 +75,7 @@ def _save(key: str, value: Any) -> None:
             db.add(row)
         db.commit()
     except Exception as e:
-        logger.error(f"DBPersistence save error for key={key}: {e}")
+        logger.error("DBPersistence save error for key=%s (%s)", key, type(e).__name__)
         db.rollback()
     finally:
         db.close()
@@ -81,14 +102,14 @@ class DBPersistence(BasePersistence):
             return
         try:
             self._conversations  = _load(_CONV_KEY)  or {}
-            self._user_data      = {int(k): v for k, v in (_load(_USER_KEY)  or {}).items()}
+            self._user_data      = {int(k): _sanitize_user_data(v) for k, v in (_load(_USER_KEY)  or {}).items()}
             self._chat_data      = {int(k): v for k, v in (_load(_CHAT_KEY)  or {}).items()}
             self._bot_data       = _load(_BOT_KEY)   or {}
             self._callback_data  = _load(_CALLBACK_KEY)
             self._loaded = True
             logger.info("DBPersistence: state loaded from database")
         except Exception as e:
-            logger.error(f"DBPersistence: failed to load state, starting fresh: {e}")
+            logger.error("DBPersistence failed to load persisted state (%s)", type(e).__name__)
             self._loaded = True  # don't retry on every call
 
     # ── Conversations ──────────────────────────────────────────────────────────
@@ -129,7 +150,7 @@ class DBPersistence(BasePersistence):
 
     async def update_user_data(self, user_id: int, data: Dict) -> None:
         self._ensure_loaded()
-        self._user_data[user_id] = data
+        self._user_data[user_id] = _sanitize_user_data(data)
         _save(_USER_KEY, self._user_data)
 
     async def refresh_user_data(self, user_id: int, user_data: Dict) -> None:

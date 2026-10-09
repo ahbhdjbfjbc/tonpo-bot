@@ -226,11 +226,11 @@ class TradingHandler:
             
             return CONFIRM_TRADE
             
-        except Exception as e:
-            logger.error(f"Trade processing error: {e}")
+        except Exception as exc:
+            logger.error("Trade processing failed (%s)", type(exc).__name__)
             await self._edit_message(
                 update, context,
-                f"❌ Error processing trade: {str(e)[:100]}\n\nحاول مجددًا أو استخدم /cancel"
+                "❌ Error processing trade. Please try again or use /cancel."
             )
             return ENTER_TRADE
         finally:
@@ -273,12 +273,9 @@ class TradingHandler:
             context.user_data['calculation'] = result
             return CONFIRM_TRADE
             
-        except Exception as e:
-            logger.error(f"Calculation error: {e}")
-            await self._edit_message(
-                update, context,
-                f"❌ خطأ في الحساب: {str(e)[:100]}"
-            )
+        except Exception as exc:
+            logger.error("Trade calculation failed (%s)", type(exc).__name__)
+            await self._edit_message(update, context, "❌ تعذر حساب الإشارة. يرجى المحاولة لاحقًا.")
             return ConversationHandler.END
     
     async def confirm_trade(self, update: Update, context: CallbackContext) -> int:
@@ -360,11 +357,11 @@ class TradingHandler:
                     parse_mode=ParseMode.MARKDOWN
                 )
             
-        except Exception as e:
-            logger.error(f"Trade execution error: {e}")
+        except Exception as exc:
+            logger.error("Trade execution failed (%s)", type(exc).__name__)
             await self._edit_message(
                 update, context,
-                f"❌ *Execution Error*\n\n{str(e)[:200]}",
+                "❌ *Execution Error*\n\nThe request could not be completed.",
                 parse_mode=ParseMode.MARKDOWN
             )
         
@@ -441,24 +438,24 @@ class TradingHandler:
                 else:
                     await update.message.reply_text("لا توجد صفقات مفتوحة.")
             
-        except Exception as e:
-            logger.error(f"Action {action} failed for user {user_id}: {e}")
+        except Exception as exc:
+            logger.error("Action %s failed for user %s (%s)", action, user_id, type(exc).__name__)
             
-            if "not registered" in str(e).lower():
+            if "not registered" in str(exc).lower():
             	await update.message.reply_text(
             	    "❌ MT5 account not found. Please check your credentials in /settings"
             	)
-            elif "not found" in str(e).lower():
+            elif "not found" in str(exc).lower():
             	await update.message.reply_text(
             	    "❌ MT5 account not found. Please check your credentials in /settings"
             	)
-            elif "timeout" in str(e).lower():
+            elif "timeout" in str(exc).lower():
             	await update.message.reply_text(
             	    "❌ Connection timeout. Please try again later."
             	)
             else:
             	await update.message.reply_text(
-            	    f"❌ تعذر جلب {action}: {str(e)[:100]}"
+                f"❌ تعذر جلب {action}. يرجى المحاولة لاحقًا."
             	)
             	
         context.user_data.clear()

@@ -292,7 +292,7 @@ class CallbackHandlers:
                     await query.edit_message_text("❌ لم يتم العثور على الصفقة.")
                     
             except Exception as e:
-                await query.edit_message_text(f"❌ خطأ: {str(e)[:100]}")
+                await query.edit_message_text("❌ تعذر تنفيذ الإجراء. يرجى المحاولة لاحقًا.")
         
         elif action == 'close_all':
             # Close all positions
@@ -392,7 +392,7 @@ class CallbackHandlers:
                 )
                 
             except Exception as e:
-                await query.edit_message_text(f"❌ خطأ: {str(e)[:100]}")
+                await query.edit_message_text("❌ تعذر تنفيذ الإجراء. يرجى المحاولة لاحقًا.")
         
         elif action == 'delete_account':
             # Delete user account

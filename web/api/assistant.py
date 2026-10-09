@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database.models import User
 from services.ai_assistant import answer, quick_actions
-from web.deps import get_current_user, get_db
+from web.deps import get_current_user, get_db, get_optional_user
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 
@@ -29,7 +29,7 @@ class ChatOut(BaseModel):
 
 
 @router.get("/status")
-def assistant_status(user: User = Depends(get_current_user)):
+def assistant_status(user: Optional[User] = Depends(get_optional_user)):
     import os
     configured = bool(os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY"))
     return {
@@ -44,7 +44,7 @@ def assistant_status(user: User = Depends(get_current_user)):
 @router.get("/quick-actions")
 def get_quick_actions(
     language: str = "ar",
-    user: User = Depends(get_current_user),
+    user: Optional[User] = Depends(get_optional_user),
 ):
     lang = language if language in ("ar", "en") else "ar"
     return {"language": lang, "actions": quick_actions(lang)}

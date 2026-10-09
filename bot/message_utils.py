@@ -32,8 +32,8 @@ async def safe_edit_message(
             return False
         else:
             # Re-raise other BadRequest errors
-            logger.error(f"BadRequest error editing message: {e}")
+            logger.error("BadRequest while editing message (%s)", type(e).__name__)
             raise
     except Exception as e:
-        logger.error(f"Unexpected error editing message: {e}")
+        logger.error("Unexpected error editing message (%s)", type(e).__name__)
         raise

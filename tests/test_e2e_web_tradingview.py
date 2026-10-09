@@ -20,7 +20,10 @@ os.environ.setdefault("ENCRYPTION_KEY", "FKT4wzz7GREEKYGDloNwvaQLa_1EpQgrUpI3Rch
 def client(monkeypatch):
     from config.settings import settings
     monkeypatch.setattr(settings, "TRADINGVIEW_WEBHOOK_SECRET", "tv-e2e-secret", raising=False)
+    monkeypatch.setattr(settings, "ENABLE_WEBHOOKS", True, raising=False)
     monkeypatch.setattr(settings, "TRADING_DRY_RUN", True, raising=False)
+    monkeypatch.setattr(settings, "TRADINGVIEW_TELEGRAM_ID", 111001, raising=False)
+    monkeypatch.setattr(settings, "TRADINGVIEW_SYMBOL_MAP", {}, raising=False)
     monkeypatch.setattr(settings, "JWT_SECRET", "test-jwt-secret-for-unit-tests-only", raising=False)
     monkeypatch.setattr(settings, "DATABASE_URL", "sqlite:////tmp/tonpo_e2e_web.db", raising=False)
     monkeypatch.setattr(settings, "CORS_ORIGINS", ["*"], raising=False)
@@ -29,6 +32,11 @@ def client(monkeypatch):
 
     from fastapi.testclient import TestClient
     from web.app import app
+    from web.api import webhooks as webhook_module
+    monkeypatch.setattr(
+        webhook_module, "_get_webhook_cache",
+        lambda: type("AllowCache", (), {"check_rate_limit": lambda self, key, limit, period: (True, period)})(),
+    )
     with TestClient(app) as c:
         yield c
 
@@ -43,7 +51,6 @@ def _tv_body(**over):
         "action": "BUY",
         "stop_loss": 1.0800,
         "take_profits": [1.0950, 1.1000],
-        "user_id": 111001,
         "id": f"e2e-{time.time()}-{os.getpid()}",
         "timestamp": time.time(),
         "strategy": "E2EStrategy",
@@ -100,6 +107,10 @@ class TestUserIsolationAPI:
     def test_dashboard_requires_auth(self, client):
         r = client.get("/api/dashboard")
         assert r.status_code == 401
+
+    def test_results_activity_and_news_require_auth(self, client):
+        for path in ("/api/results", "/api/activity/today", "/api/news/status"):
+            assert client.get(path).status_code == 401
 
 
 class TestNoManualExecuteEndpoint:

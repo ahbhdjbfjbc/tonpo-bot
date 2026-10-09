@@ -15,10 +15,20 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 import uuid
+from decimal import Decimal, ROUND_DOWN
+import secrets
+import hashlib
+import hmac
+import json
 
 import aiohttp
 from sqlalchemy import Column, String, Integer, DateTime, Enum as SQLEnum
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.exc import IntegrityError
+
+from config.settings import settings
+from database.models import PaymentRequest as DatabasePaymentRequest, User, AdminRole, AdminAuditLog
+from database.repositories import UserRepository
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)
@@ -337,11 +347,11 @@ class PaymentManager:
                 poll_count += 1
             
             except Exception as e:
-                logger.error(f"Error monitoring payment {payment_id}: {e}")
+                logger.error("Error monitoring payment %s (%s)", payment_id, type(e).__name__)
                 await notification_callback(
                     status=PaymentStatus.FAILED,
                     confirmations=0,
-                    message=f"❌ Error checking payment status: {str(e)}"
+                    message="❌ Error checking payment status. Please try again later."
                 )
                 await asyncio.sleep(60)
                 poll_count += 1
@@ -391,7 +401,7 @@ class CryptoPaymentHandler:
                 "🔄 Setting up payment...",
                 parse_mode="Markdown"
             )
-            
+
             checkout = await self.payment.initiate_upgrade(
                 user_id=user_id,
                 plan_id=plan_id,
@@ -451,9 +461,342 @@ class CryptoPaymentHandler:
                 )
             
         except Exception as e:
-            logger.error(f"Error in upgrade command for {user_id}: {e}")
+            logger.error("Error in upgrade command for %s (%s)", user_id, type(e).__name__)
             await self.telegram.send_message(
                 telegram_id,
-                f"❌ Error: {str(e)}\n\nPlease try again or contact support.",
+                "❌ The upgrade could not be completed. Please try again or contact support.",
                 parse_mode="Markdown"
             )
+
+
+class PaymentService:
+    """Authoritative local payment-request facade used by Telegram callbacks.
+
+    This service creates pending requests only. Subscription activation must be
+    driven by a trusted external verifier; a click or local state is never
+    treated as proof of payment.
+    """
+
+    def __init__(self, db):
+        self.db = db
+        self.users = UserRepository(db)
+
+    @staticmethod
+    def _wallet(currency: str) -> tuple[str, str]:
+        currency = currency.upper()
+        if currency == "USDT":
+            return getattr(settings, "USDT_WALLET_ADDRESS", None) or "", "ERC20"
+        if currency == "BTC":
+            return getattr(settings, "BTC_WALLET_ADDRESS", None) or "", "BTC"
+        raise ValueError("Unsupported payment currency")
+
+    @staticmethod
+    def _is_configured_wallet(wallet: str) -> bool:
+        return bool(wallet and not wallet.startswith(("0xYour", "bc1Your", "your_")))
+
+    def _expire(self, payment: DatabasePaymentRequest) -> None:
+        if payment.status in {"pending", "submitted"} and payment.expires_at <= datetime.utcnow():
+            payment.status = "expired"
+
+    def create_payment_request(self, *, user_id: int, plan_tier: str,
+                               billing_period: str, currency: str) -> Dict[str, Any]:
+        user = self.users.get_by_telegram_id(user_id)
+        if not user or not user.is_active or user.is_banned:
+            raise ValueError("Account unavailable")
+        # Serialize request creation per user. Without a row lock, two
+        # simultaneous clicks can both see no pending request and create two
+        # payment intents for the same entitlement.
+        user = self.db.query(User).filter(User.id == user.id).with_for_update().one()
+        from database.models import SubscriptionPlan
+        plan = self.db.query(SubscriptionPlan).filter_by(tier=plan_tier).first()
+        if not plan or plan.is_free or not plan.is_active or not plan.is_visible:
+            raise ValueError("Selected plan cannot be purchased")
+        if billing_period not in {"monthly", "yearly"}:
+            raise ValueError("Unsupported billing period")
+        wallet, network = self._wallet(currency)
+        if not self._is_configured_wallet(wallet):
+            raise RuntimeError("Payment provider is not configured")
+
+        pending = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.user_id == user.id,
+            DatabasePaymentRequest.plan_tier == plan_tier,
+            DatabasePaymentRequest.billing_period == billing_period,
+            DatabasePaymentRequest.currency == currency.upper(),
+            DatabasePaymentRequest.status == "pending",
+        ).order_by(DatabasePaymentRequest.created_at.desc()).first()
+        if pending:
+            self._expire(pending)
+            if pending.status == "pending":
+                self.db.commit()
+                return self._out(pending)
+
+        base = Decimal(str(plan.price_yearly if billing_period == "yearly" else plan.price_monthly))
+        # The offset identifies a request; it is never payment confirmation.
+        offset = Decimal(secrets.randbelow(9000) + 1000) / Decimal("100000")
+        unique_amount = (base + offset).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+        payment = DatabasePaymentRequest(
+            user_id=user.id,
+            plan_tier=plan_tier,
+            billing_period=billing_period,
+            base_amount=base,
+            unique_amount=unique_amount,
+            currency=currency.upper(),
+            wallet_address=wallet,
+            network=network,
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(hours=getattr(settings, "PAYMENT_EXPIRY_HOURS", 2)),
+        )
+        self.db.add(payment)
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            raise RuntimeError("Payment request could not be created")
+        self.db.refresh(payment)
+        return self._out(payment)
+
+    def get_pending_payment(self, user_id: int, payment_id: str | None = None) -> Optional[Dict[str, Any]]:
+        user = self.users.get_by_telegram_id(user_id)
+        if not user:
+            return None
+        query = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.user_id == user.id,
+            DatabasePaymentRequest.status.in_(("pending", "submitted")),
+        )
+        if payment_id:
+            query = query.filter(DatabasePaymentRequest.uuid == payment_id)
+        payment = query.order_by(DatabasePaymentRequest.created_at.desc()).first()
+        if not payment:
+            return None
+        self._expire(payment)
+        self.db.commit()
+        return self._out(payment) if payment.status in {"pending", "submitted"} else None
+
+    def _cancel_pending(self, user_id: int, payment_id: str | None = None) -> bool:
+        user = self.users.get_by_telegram_id(user_id)
+        if not user:
+            return False
+        query = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.user_id == user.id,
+            DatabasePaymentRequest.status == "pending",
+        )
+        if payment_id:
+            query = query.filter(DatabasePaymentRequest.uuid == payment_id)
+        payment = query.order_by(DatabasePaymentRequest.created_at.desc()).first()
+        if not payment:
+            return False
+        payment.status = "cancelled"
+        self.db.commit()
+        return True
+
+    @staticmethod
+    def _out(payment: DatabasePaymentRequest) -> Dict[str, Any]:
+        return {
+            "payment_id": payment.uuid,
+            "plan_tier": payment.plan_tier,
+            "billing_period": payment.billing_period,
+            "amount": str(payment.unique_amount),
+            "wallet_address": payment.wallet_address,
+            "currency": payment.currency,
+            "network": payment.network,
+            "expires_at": payment.expires_at.isoformat(),
+            "expires_in_minutes": max(0, int((payment.expires_at - datetime.utcnow()).total_seconds() // 60)),
+            "status": payment.status,
+            "verification": "admin_approved" if payment.status == "approved" else "manual_review",
+        }
+
+    def _admin_role(self, admin_id: int) -> str | None:
+        """Return an authorized payment-review role, or None."""
+        if admin_id in set(getattr(settings, "ADMIN_USER_IDS", []) or []):
+            return "SUPER_ADMIN"
+        role = self.db.query(AdminRole).filter(
+            AdminRole.telegram_id == admin_id, AdminRole.is_active == True  # noqa: E712
+        ).first()
+        if not role:
+            return None
+        permissions = set(role.permissions or [])
+        if role.role in {"ADMIN", "SUPER_ADMIN"} or "*" in permissions or "subscriptions.manage" in permissions:
+            return role.role
+        return None
+
+    def _require_payment_admin(self, admin_id: int) -> str:
+        role = self._admin_role(admin_id)
+        if not role:
+            raise PermissionError("Payment review authorization required")
+        return role
+
+    def submit_payment_proof(self, *, user_id: int, payment_id: str, tx_hash: str,
+                             amount: Decimal | str, currency: str, network: str,
+                             recipient: str | None = None) -> Dict[str, Any]:
+        """Store untrusted user proof for manual review; never grant access."""
+        user = self.users.get_by_telegram_id(user_id)
+        if not user or not user.is_active or user.is_banned:
+            raise ValueError("Account unavailable")
+        payment = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.uuid == payment_id,
+            DatabasePaymentRequest.user_id == user.id,
+        ).with_for_update().first()
+        if not payment:
+            raise ValueError("Payment request not found")
+        self._expire(payment)
+        if payment.status == "expired":
+            self.db.commit()
+            raise ValueError("Payment has expired")
+        if payment.status == "submitted":
+            if payment.tx_hash == str(tx_hash).strip():
+                return self._out(payment) | {"idempotent": True}
+            raise ValueError("Payment proof is already under review")
+        if payment.status in {"approved", "activated", "rejected", "cancelled"}:
+            raise ValueError("Payment request is not accepting proof")
+        tx_hash = str(tx_hash or "").strip()
+        currency = str(currency or "").upper().strip()
+        network = str(network or "").upper().strip()
+        if not tx_hash or len(tx_hash) > 100:
+            raise ValueError("Invalid transaction hash")
+        if currency != payment.currency or network != payment.network:
+            raise ValueError("Payment currency or network mismatch")
+        if recipient is not None and str(recipient).strip() != payment.wallet_address:
+            raise ValueError("Payment recipient mismatch")
+        try:
+            submitted_amount = Decimal(str(amount))
+        except Exception as exc:
+            raise ValueError("Invalid payment amount") from exc
+        if submitted_amount != Decimal(str(payment.unique_amount)):
+            raise ValueError("Payment amount mismatch")
+        duplicate = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.network == payment.network,
+            DatabasePaymentRequest.tx_hash == tx_hash,
+            DatabasePaymentRequest.id != payment.id,
+        ).first()
+        if duplicate:
+            raise ValueError("Payment transaction already assigned")
+        payment.tx_hash = tx_hash
+        payment.confirmed_amount = submitted_amount
+        payment.proof_submitted_at = datetime.utcnow()
+        payment.status = "submitted"
+        try:
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ValueError("Payment transaction already assigned") from exc
+        return self._out(payment) | {"idempotent": False}
+
+    def approve_payment(self, *, payment_id: str, admin_id: int) -> Dict[str, Any]:
+        """Atomically approve one submitted proof and activate its subscription."""
+        role = self._require_payment_admin(admin_id)
+        payment = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.uuid == payment_id
+        ).with_for_update().first()
+        if not payment:
+            raise ValueError("Payment request not found")
+        self._expire(payment)
+        if payment.status == "expired":
+            self.db.commit()
+            raise ValueError("Payment has expired")
+        if payment.status == "approved":
+            return self._out(payment) | {"status": "approved", "idempotent": True}
+        if payment.status in {"rejected", "cancelled", "pending"}:
+            raise ValueError("Payment proof is not ready for approval")
+        if payment.status != "submitted" or not payment.tx_hash:
+            raise ValueError("Payment proof is not ready for approval")
+        if payment.confirmed_amount != Decimal(str(payment.unique_amount)):
+            raise ValueError("Payment amount mismatch")
+        configured_wallet, configured_network = self._wallet(payment.currency)
+        if (not self._is_configured_wallet(configured_wallet)
+                or payment.wallet_address != configured_wallet
+                or payment.network != configured_network):
+            raise ValueError("Payment recipient or network is no longer configured")
+        duplicate = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.network == payment.network,
+            DatabasePaymentRequest.tx_hash == payment.tx_hash,
+            DatabasePaymentRequest.id != payment.id,
+        ).first()
+        if duplicate:
+            raise ValueError("Payment transaction already assigned")
+        user = self.db.query(User).filter(User.id == payment.user_id).with_for_update().one()
+        from database.models import SubscriptionPlan
+        plan = self.db.query(SubscriptionPlan).filter_by(tier=payment.plan_tier).first()
+        if not plan or not plan.is_active or not plan.is_visible:
+            raise ValueError("Payment plan is unavailable")
+        old_value = {"status": payment.status, "subscription_tier": user.subscription_tier}
+        duration = 365 if payment.billing_period == "yearly" else 30
+        user.subscription_tier = payment.plan_tier
+        user.subscription_expiry = datetime.utcnow() + timedelta(days=duration)
+        user.subscription_features = {
+            "max_trades": plan.max_trades_per_day,
+            "max_position_size": float(plan.max_position_size),
+            "max_symbols": plan.max_symbols,
+            "multiple_tps": plan.supports_multiple_tps,
+            "auto_trading": plan.supports_auto_trading,
+            "api_access": plan.supports_api,
+            "max_connections": plan.max_connections,
+            "rate_limit": plan.rate_limit_per_second,
+            "support_priority": plan.support_priority,
+        }
+        payment.status = "approved"
+        payment.confirmed_at = payment.confirmed_at or datetime.utcnow()
+        payment.activated_at = datetime.utcnow()
+        payment.reviewed_at = datetime.utcnow()
+        payment.reviewed_by = admin_id
+        self.db.add(AdminAuditLog(
+            admin_telegram_id=admin_id, role=role, action="payment_approve",
+            target_type="payment", target_id=payment.uuid, old_value=old_value,
+            new_value={"status": "approved", "subscription_tier": payment.plan_tier, "tx_hash": payment.tx_hash},
+            result="success",
+        ))
+        try:
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ValueError("Payment transaction already assigned") from exc
+        return self._out(payment) | {"status": "approved", "idempotent": False}
+
+    def reject_payment(self, *, payment_id: str, admin_id: int, reason: str) -> Dict[str, Any]:
+        """Reject proof transactionally; rejected requests can never activate."""
+        role = self._require_payment_admin(admin_id)
+        reason = str(reason or "").strip()
+        if not reason or len(reason) > 255:
+            raise ValueError("A rejection reason is required")
+        payment = self.db.query(DatabasePaymentRequest).filter(
+            DatabasePaymentRequest.uuid == payment_id
+        ).with_for_update().first()
+        if not payment:
+            raise ValueError("Payment request not found")
+        if payment.status == "rejected":
+            return self._out(payment) | {"status": "rejected", "idempotent": True}
+        if payment.status in {"approved", "activated"}:
+            raise ValueError("Approved payment cannot be rejected")
+        if payment.status == "expired":
+            raise ValueError("Expired payment cannot be reviewed")
+        old_status = payment.status
+        payment.status = "rejected"
+        payment.reviewed_at = datetime.utcnow()
+        payment.reviewed_by = admin_id
+        payment.rejection_reason = reason
+        self.db.add(AdminAuditLog(
+            admin_telegram_id=admin_id, role=role, action="payment_reject",
+            target_type="payment", target_id=payment.uuid,
+            old_value={"status": old_status}, new_value={"status": "rejected", "reason": reason},
+            result="success",
+        ))
+        self.db.commit()
+        return self._out(payment) | {"status": "rejected", "idempotent": False}
+
+    @staticmethod
+    def verify_webhook_signature(raw_body: bytes, signature: Optional[str]) -> bool:
+        """Verify the generic provider boundary without exposing the secret."""
+        configured = getattr(settings, "PAYMENT_WEBHOOK_SECRET", None)
+        if not configured or not signature:
+            return False
+        expected = hmac.new(
+            str(configured).encode("utf-8"), raw_body, hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(expected, str(signature).strip())
+
+    def process_verified_event(self, raw_body: bytes, signature: Optional[str]) -> Dict[str, Any]:
+        """Reject the obsolete automatic-provider path.
+
+        Tonpo uses manual administrator approval. A user or webhook cannot
+        activate a subscription, even when a payload is signed.
+        """
+        raise PermissionError("Automatic payment verification is disabled; admin approval is required")

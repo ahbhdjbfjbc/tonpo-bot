@@ -65,3 +65,22 @@ def test_risk_service_rejects_non_finite_or_non_positive_inputs(balance, risk):
     signal = TradeSignal(OrderType.BUY, "EURUSD", 1.1000, 1.0990, [1.1020])
     with pytest.raises(ValueError):
         RiskService().calculate_trade(signal, balance=balance, risk_factor=risk)
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        {},
+        {"tick_size": 0.0, "tick_value": 10, "volume_min": 0.1, "volume_max": 2.0, "volume_step": 0.1},
+        {"tick_size": 0.0001, "tick_value": 10, "volume_min": 2.0, "volume_max": 1.0, "volume_step": 0.1},
+        {"tick_size": 0.0001, "tick_value": 10, "volume_min": 0.1, "volume_max": 2.0, "volume_step": 3.0},
+    ],
+)
+def test_risk_service_rejects_missing_or_invalid_broker_constraints(constraints):
+    from services.risk_service import RiskService
+
+    signal = TradeSignal(OrderType.BUY, "EURUSD", 1.1000, 1.0990, [1.1020])
+    with pytest.raises(ValueError):
+        RiskService().calculate_trade(
+            signal, balance=10000, risk_factor=0.01, broker_constraints=constraints
+        )

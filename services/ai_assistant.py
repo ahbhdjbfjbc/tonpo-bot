@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from config.settings import settings
 from database.models import SignalReceipt, Trade, User
+from services.results import ResultsService
+from services.subscription import SubscriptionService, TrialService
+from services.news_protection import NewsProtectionService
 
 # Knowledge answers (bilingual). No secrets, no promises of profit.
 KB: Dict[str, Dict[str, str]] = {
@@ -42,8 +45,8 @@ KB: Dict[str, Dict[str, str]] = {
         "en": "To start trading: 1) Register and connect MT5 2) Activate a suitable plan 3) Set risk 4) Connect TradingView or use channel signals. Execution goes through SignalPipeline and risk checks — Dry Run mode may block real orders.",
     },
     "tradingview": {
-        "ar": "لربط TradingView: أعد Webhook إلى عنوان المنصة /api/webhooks/tradingview مع الرأس السري X-TradingView-Secret، وأدرج user_id (Telegram ID) وsymbol وaction وstop_loss وtake_profits في الجسم.",
-        "en": "To connect TradingView: point the webhook to /api/webhooks/tradingview with header X-TradingView-Secret, and include user_id (Telegram ID), symbol, action, stop_loss, and take_profits in the body.",
+        "ar": "لربط TradingView: أعد Webhook إلى عنوان المنصة /api/webhooks/tradingview مع الرأس السري X-TradingView-Secret، استخدم الإعداد الموثوق على الخادم مع symbol وaction وstop_loss وtake_profits. لا تُرسل user_id لتحديد مستخدم آخر.",
+        "en": "To connect TradingView: point the webhook to /api/webhooks/tradingview with header X-TradingView-Secret, and include symbol, action, stop_loss, and take_profits. User identity is resolved by trusted server configuration.",
     },
     "signals": {
         "ar": "إشاراتك تظهر في صفحة «الإشارات». كل مستخدم يرى إشاراته فقط. الحالة dry_run تعني أن التنفيذ محجوب بوضع المحاكاة.",
@@ -65,6 +68,26 @@ KB: Dict[str, Dict[str, str]] = {
         "ar": "إدارة المخاطر تحدد نسبة المخاطرة لكل صفقة والحدود اليومية. عدّلها من الإعدادات بعد الحفظ عبر API المصرح به فقط.",
         "en": "Risk settings define per-trade risk and daily limits. Update them from Settings via the authenticated API only.",
     },
+    "welcome": {
+        "ar": "أهلًا بك في Tonpo — حماية وتنفيذ آمن للإشارات. ابدأ بالتسجيل، اربط MT5، راجع المخاطر، ثم راقب إشاراتك ونتائجك من لوحة التحكم. تحصل الحسابات الجديدة المؤهلة على تجربة مجانية 3 أيام. المساعد هنا للإرشاد فقط.",
+        "en": "Welcome to Tonpo — protected signal validation and execution. Register, connect MT5, review risk, then follow signals and real results from your dashboard. Eligible new accounts receive a 3-day free trial. This assistant is guidance only.",
+    },
+    "account": {
+        "ar": "أستطيع عرض حالة الحساب الحالية فقط: التسجيل، اتصال MT5، التجربة، الاشتراك، وآخر قرارات الإشارات. افتح Account أو استخدم /account.",
+        "en": "I can explain your current account state: registration, MT5 connection, trial, subscription, and recent signal decisions. Open Account or use /account.",
+    },
+    "trial": {
+        "ar": "التجربة المجانية مدتها 3 أيام وتبدأ مرة واحدة من الخادم عند إنشاء الحساب المؤهل. بعد انتهائها لا يمكن إعادة تشغيلها؛ راجع الباقات للاشتراك.",
+        "en": "The free trial lasts 3 days and starts once server-side for an eligible new account. It cannot be restarted after expiry; review the available plans to subscribe.",
+    },
+    "results": {
+        "ar": "يعرض Results Center النتائج المحفوظة فعليًا فقط. إذا لم توجد صفقة مغلقة أو بيانات، سأقول إنها غير متاحة بدل اختراع أرقام.",
+        "en": "Results Center shows only persisted real results. If no closed trade or metric exists, it is reported as unavailable rather than invented.",
+    },
+    "news": {
+        "ar": "News Protection قد تمنع الإشارة عند وجود خبر مؤثر أو عند غياب/تقادم بيانات الأخبار. القرار يأتي من backend ويظل fail-closed.",
+        "en": "News Protection can block a signal for a high-impact event or when news data is stale/unavailable. The backend decides and remains fail-closed.",
+    },
 }
 
 
@@ -79,6 +102,11 @@ def detect_lang(text: str, preferred: Optional[str] = None) -> str:
 def _match_intent(msg: str) -> str:
     m = (msg or "").lower()
     pairs = [
+        ("welcome", ["welcome", "مرحبا", "مرحب", "ابدأ", "start"]),
+        ("account", ["حسابي", "حالة حساب", "account status", "my account"]),
+        ("trial", ["trial", "تجربة", "تنتهي التجربة", "free trial"]),
+        ("results", ["نتيجة", "نتائج", "results", "last trade", "آخر صفقة"]),
+        ("news", ["أخبار", "news", "منع التداول بسبب الأخبار"]),
         ("register", ["سجل", "تسجيل", "register", "sign up"]),
         ("login", ["دخول", "login", "sign in"]),
         ("mt5", ["mt5", "ميتا", "gateway", "بوابة", "ربط"]),
@@ -126,9 +154,30 @@ def build_user_context(db: Session, user: User) -> Dict[str, Any]:
         next_step = "subscription" if (user.subscription_tier or "free") == "free" else "tradingview"
     elif user.is_verified:
         next_step = "mt5"
+    trial = TrialService(db).get_trial_status(user.telegram_id)
+    try:
+        plan = SubscriptionService(db).get_user_plan(user.telegram_id)
+        plan_features = SubscriptionService(db).get_plan_features(getattr(plan, "tier", user.subscription_tier))
+    except Exception:
+        plan_features = {}
+    latest_signal = recent_sig[0] if recent_sig else None
+    latest_trade = recent_tr[0] if recent_tr else None
+    try:
+        news = NewsProtectionService().system_status()
+        news_state = {"status": news.get("status"), "reason": news.get("reason")}
+    except Exception:
+        news_state = {"status": "unavailable", "reason": "News state unavailable"}
+    today_start = __import__('datetime').datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_signals = db.query(SignalReceipt).filter(SignalReceipt.user_id == user.id, SignalReceipt.created_at >= today_start).all()
+    accepted_today = sum(1 for item in today_signals if item.final_decision in {"accepted", "executed"} or item.status in {"execution", "executed", "dry_run", "partial", "pending", "unknown"})
+    result_snapshot = ResultsService(db).results(user.telegram_id, "30d")
+    metrics = result_snapshot.get("metrics") or {}
     return {
         "telegram_id": user.telegram_id,
         "subscription_tier": user.subscription_tier,
+        "subscription_status": trial.get("status") if trial.get("active") or trial.get("status") == "EXPIRED" else ("ACTIVE" if user.subscription_expiry and user.subscription_expiry > __import__('datetime').datetime.utcnow() else "NOT ACTIVE"),
+        "trial": trial,
+        "plan_features": {key: plan_features.get(key) for key in ("supports_auto_trading", "supports_api", "max_trades_per_day", "max_symbols") if key in plan_features},
         "is_verified": bool(user.is_verified),
         "is_active": bool(user.is_active),
         "has_gateway": bool(user.has_gateway_credentials),
@@ -138,9 +187,17 @@ def build_user_context(db: Session, user: User) -> Dict[str, Any]:
             for s in recent_sig
         ],
         "trades_recent": [
-            {"id": t.id, "symbol": t.symbol, "status": t.status}
+            {"id": t.id, "symbol": t.symbol, "status": t.status, "profit_loss": float(t.profit_loss) if t.profit_loss is not None else None}
             for t in recent_tr
         ],
+        "latest_signal": {"status": latest_signal.status, "reason": latest_signal.rejection_reason, "news_status": latest_signal.news_status} if latest_signal else None,
+        "latest_trade": {"symbol": latest_trade.symbol, "status": latest_trade.status, "profit_loss": float(latest_trade.profit_loss) if latest_trade and latest_trade.profit_loss is not None else None} if latest_trade else None,
+        "results_30d": {key: metrics.get(key) for key in ("total_closed_trades", "win_rate", "total_pnl")},
+        "signals_today": len(today_signals),
+        "accepted_signals_today": accepted_today,
+        "rejected_signals_today": len(today_signals) - accepted_today,
+        "news": news_state,
+        "risk": {"default_risk_factor": user.default_risk_factor, "configured": user.default_risk_factor is not None},
         "open_trades": open_tr,
         "next_best_step": next_step,
         "trading_mode": getattr(user, "trading_mode", None) or "demo",
@@ -189,6 +246,10 @@ def answer(
                 f"بوابة MT5: {'مربوطة' if context.get('has_gateway') else 'غير مربوطة'}\n"
                 f"Dry Run: {'نعم' if context.get('dry_run') else 'لا'}\n"
                 f"صفقات مفتوحة: {context.get('open_trades')}\n"
+                f"حالة Trial: {context.get('trial', {}).get('status')}\n"
+                f"إشارات اليوم: {context.get('signals_today')} | المقبولة: {context.get('accepted_signals_today')} | المرفوضة: {context.get('rejected_signals_today')}\n"
+                f"آخر إشارة: {(context.get('latest_signal') or {}).get('status', 'غير متاح')}\n"
+                f"News Protection: {(context.get('news') or {}).get('status', 'غير متاح')}\n"
                 f"وضع التداول: {context.get('trading_mode')}\n"f"الخطوة التالية المقترحة: {context.get('next_best_step')}"
             )
         else:
@@ -198,6 +259,10 @@ def answer(
                 f"MT5 gateway: {'connected' if context.get('has_gateway') else 'not connected'}\n"
                 f"Dry Run: {'yes' if context.get('dry_run') else 'no'}\n"
                 f"Open trades: {context.get('open_trades')}\n"
+                f"Trial: {context.get('trial', {}).get('status')}\n"
+                f"Signals today: {context.get('signals_today')} | accepted: {context.get('accepted_signals_today')} | rejected: {context.get('rejected_signals_today')}\n"
+                f"Latest signal: {(context.get('latest_signal') or {}).get('status', 'unavailable')}\n"
+                f"News Protection: {(context.get('news') or {}).get('status', 'unavailable')}\n"
                 f"Trading mode: {context.get('trading_mode')}\n"f"Suggested next step: {context.get('next_best_step')}"
             )
 

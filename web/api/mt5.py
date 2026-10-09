@@ -56,8 +56,8 @@ async def mt5_status(
             message="Connected" + (" (DRY RUN — no live orders)" if dry else ""),
         )
     except Exception as exc:
-        logger.info("MT5 status check failed for user %s: %s", user.id, exc)
-        errors.append(str(exc)[:200])
+        logger.info("MT5 status check failed for user %s (%s)", user.id, type(exc).__name__)
+        errors.append("Gateway status unavailable")
         return MT5StatusOut(
             connected=False,
             dry_run=dry,

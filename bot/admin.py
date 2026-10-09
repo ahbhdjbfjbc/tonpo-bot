@@ -1,7 +1,7 @@
 # fx/bot/admin.py
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ConversationHandler, CallbackContext, CallbackQueryHandler, MessageHandler, filters
@@ -141,7 +141,7 @@ class AdminHandler:
 
     def _get_admin_counts(self):
         """Use aggregate queries so admin views do not load every model column."""
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
         scalar = lambda query: query.scalar() or 0
         return {
             'users': scalar(self.db.query(func.count(User.id))),
@@ -180,7 +180,7 @@ class AdminHandler:
             User.is_active.is_(True), User.is_verified.is_(True), User.is_banned.is_(False)
         ).scalar() or 0
         trades_today = self.db.query(func.count(Trade.id)).filter(
-            Trade.created_at >= datetime.utcnow() - timedelta(hours=24)
+            Trade.created_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
         ).scalar() or 0
         system_health = self.monitoring.get_system_health()
         system_info = system_health.get('system') or {}
@@ -384,7 +384,7 @@ class AdminHandler:
                 if max_uses is not None and max_uses < 1:
                     raise ValueError
                 ends_at = datetime.fromisoformat(ends_raw) if ends_raw else None
-                if ends_at and ends_at <= datetime.utcnow():
+                if ends_at and ends_at <= datetime.now(timezone.utc).replace(tzinfo=None):
                     raise ValueError
                 targets = [int(item.strip()) for item in target_raw.split(',') if item.strip()]
                 if any(item <= 0 for item in targets):
@@ -542,7 +542,7 @@ class AdminHandler:
             f"*الاشتراك:*\n"
             f"الخطة: {user.subscription_tier}\n"
             f"ينتهي في: {user.subscription_expiry.strftime('%Y-%m-%d') if user.subscription_expiry else 'غير محدد'}\n"
-            f"Trial: {'نشط حتى ' + user.trial_end.strftime('%Y-%m-%d') if user.trial_end and user.trial_end > datetime.utcnow() else ('منتهي' if user.trial_end else 'لا يوجد')}\n"
+            f"Trial: {'نشط حتى ' + user.trial_end.strftime('%Y-%m-%d') if user.trial_end and user.trial_end > datetime.now(timezone.utc).replace(tzinfo=None) else ('منتهي' if user.trial_end else 'لا يوجد')}\n"
             f"آخر نشاط: {user.last_active.strftime('%Y-%m-%d %H:%M') if user.last_active else 'غير متاح'}\n"
             f"صفقات اليوم: {user.daily_trades}\n\n"
             
@@ -711,7 +711,7 @@ class AdminHandler:
         return ADMIN_MAIN
 
     async def _show_trials(self, update, context):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         active = self.db.query(func.count(User.id)).filter(
             User.trial_start.isnot(None), User.trial_end > now
         ).scalar()
@@ -726,7 +726,7 @@ class AdminHandler:
         )
 
     async def _show_subscriptions(self, update, context):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         active = self.db.query(func.count(User.id)).filter(
             User.subscription_expiry > now
         ).scalar()
@@ -1203,7 +1203,7 @@ class AdminHandler:
                 else:
                     draft = context.user_data.get('pending_offer') or {}
                     if action == 'offer_create':
-                        offer = AdminOffer(**draft, starts_at=datetime.utcnow(),
+                        offer = AdminOffer(**draft, starts_at=datetime.now(timezone.utc).replace(tzinfo=None),
                                            is_active=False, created_by=admin_id)
                         self.db.add(offer)
                         self.db.flush()
@@ -1278,7 +1278,7 @@ class AdminHandler:
                      'subscription_expiry': user.subscription_expiry.isoformat() if user.subscription_expiry else None,
                      'trial_start': user.trial_start.isoformat() if user.trial_start else None,
                      'trial_end': user.trial_end.isoformat() if user.trial_end else None}
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         features = dict(user.subscription_features or {})
         if action == 'ban':
             user.is_banned = True
@@ -1608,7 +1608,7 @@ class AdminHandler:
                     return
                 old = ticket.status
                 ticket.status = 'closed' if action.startswith('ticket_close_') else 'open'
-                ticket.closed_at = datetime.utcnow() if ticket.status == 'closed' else None
+                ticket.closed_at = datetime.now(timezone.utc).replace(tzinfo=None) if ticket.status == 'closed' else None
                 if not self.record_audit(
                     update.effective_user.id, f'support.{ticket.status}',
                     target_type='ticket', target_id=ticket.id,

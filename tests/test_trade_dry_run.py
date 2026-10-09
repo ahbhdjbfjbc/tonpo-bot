@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -70,3 +71,53 @@ def test_live_execution_fails_closed_before_gateway_when_result_column_is_missin
     finally:
         db.close()
         engine.dispose()
+
+
+
+def test_calculate_only_is_explicitly_non_executable_without_gateway_constraints(monkeypatch):
+    from gateway_client.adapter import GatewayCapabilityUnavailable
+    from services.risk_service import RiskService
+    from services.signal_processor import SignalProcessor
+
+    class Connection:
+        async def get_account_information(self):
+            return {"balance": 10000.0, "currency": "USD"}
+
+        async def get_symbol_price(self, symbol):
+            return {"bid": 1.1000, "ask": 1.1001}
+
+        async def get_symbol_constraints(self, symbol):
+            raise GatewayCapabilityUnavailable("unsupported")
+
+    class Executor(TradeExecutor):
+        async def _get_connection(self, user_id):
+            return Connection()
+
+    user = SimpleNamespace(
+        default_risk_factor=0.01,
+        max_position_size=1.0,
+        settings=SimpleNamespace(symbol_risk_overrides={}),
+    )
+    executor = Executor.__new__(Executor)
+    executor.user_repo = SimpleNamespace(get_by_telegram_id=lambda user_id: user)
+    executor.signal_processor = SignalProcessor()
+    executor.risk_service = RiskService()
+
+    result = asyncio.run(executor.calculate_only(101, "BUY EURUSD\nEntry 1.1000\nSL 1.0990\nTP 1.1020"))
+
+    assert result["success"] is False
+    assert result["status"] == "constraints_unavailable"
+    assert result["executable"] is False
+    assert "hardcoded" not in result["error"].lower()
+
+
+def test_gateway_adapter_exposes_unsupported_constraints_capability_explicitly():
+    from gateway_client.adapter import GatewayCapabilityUnavailable, TonpoConnectionAdapter
+
+    adapter = TonpoConnectionAdapter.__new__(TonpoConnectionAdapter)
+    try:
+        asyncio.run(adapter.get_symbol_constraints("EURUSD"))
+    except GatewayCapabilityUnavailable as exc:
+        assert "constraints" in str(exc).lower()
+    else:
+        raise AssertionError("unsupported gateway capability must fail closed")

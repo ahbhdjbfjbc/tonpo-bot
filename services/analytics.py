@@ -275,7 +275,9 @@ class AnalyticsService:
         equity = []
         trade_counts = []
         
-        current_equity = 10000  # Starting equity (could be actual balance)
+        # No synthetic starting balance: this curve represents cumulative
+        # persisted P/L, not an account-equity claim.
+        current_equity = 0.0
         daily_trades = 0
         current_date = None
         

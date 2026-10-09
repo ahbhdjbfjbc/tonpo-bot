@@ -29,10 +29,11 @@ def _normalize(mode: str | None) -> str:
 def get_trading_mode(user: User = Depends(get_current_user)):
     mode = _normalize(getattr(user, "trading_mode", None))
     dry = bool(getattr(settings, "TRADING_DRY_RUN", True))
+    effective_label = "DRY RUN" if dry else ("LIVE TRADING" if mode == "live" else "DEMO TRADING")
     return {
         "mode": mode,
-        "label": "LIVE TRADING" if mode == "live" else "DEMO TRADING",
-        "badge": "🟢 LIVE TRADING" if mode == "live" else "🔵 DEMO TRADING",
+        "label": effective_label,
+        "badge": "🔵 DRY RUN" if dry else ("🟢 LIVE TRADING" if mode == "live" else "🔵 DEMO TRADING"),
         "dry_run_env": dry,
         "real_orders_possible": bool(mode == "live" and not dry),
         "note": (

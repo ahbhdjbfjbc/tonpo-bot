@@ -165,8 +165,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     break
     except WebSocketDisconnect:
         pass
-    except Exception:
-        logger.exception("WebSocket error")
+    except Exception as exc:
+        logger.error("WebSocket error (%s)", type(exc).__name__)
     finally:
         if user is not None:
             await _unregister(user.id, websocket)

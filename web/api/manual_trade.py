@@ -18,7 +18,6 @@ async def manual_execute(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    dry = bool(getattr(settings, "TRADING_DRY_RUN", True))
     receipt = (
         db.query(SignalReceipt)
         .filter(SignalReceipt.id == receipt_id, SignalReceipt.user_id == user.id)
@@ -26,18 +25,6 @@ async def manual_execute(
     )
     if not receipt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Signal not found")
-
-    if dry:
-        # Explicit dry-run boundary — no Gateway call
-        receipt.status = "dry_run"
-        db.commit()
-        return {
-            "success": False,
-            "status": "dry_run",
-            "dry_run": True,
-            "receipt_id": receipt_id,
-            "error": "Trading is disabled in dry-run mode",
-        }
 
     pipeline = get_signal_pipeline(db)
     if pipeline is None:
@@ -50,6 +37,6 @@ async def manual_execute(
     else:
         result = {"success": False, "status": "unavailable", "error": "Confirm path unavailable"}
     if isinstance(result, dict):
-        result["dry_run"] = False
+        result["dry_run"] = bool(getattr(settings, "TRADING_DRY_RUN", True))
         result["receipt_id"] = receipt_id
     return result

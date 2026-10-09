@@ -12,6 +12,20 @@ from web.deps import get_current_user, get_db
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 
 
+def _timeline(trade: Trade) -> list[dict]:
+    """Expose only lifecycle facts represented by persisted trade state."""
+    events = [{"key": "received", "label": "Signal recorded", "state": "complete"}]
+    if trade.position_size is not None:
+        events.append({"key": "position", "label": "Position calculated", "state": "complete"})
+    events.append({
+        "key": "execution",
+        "label": "Execution result",
+        "state": trade.status or "unknown",
+        "at": trade.executed_at.isoformat() + "Z" if trade.executed_at else None,
+    })
+    return events
+
+
 @router.get("")
 @router.get("/")
 def list_trades(
@@ -71,6 +85,7 @@ def get_trade(
         "status": t.status,
         "execution_results": t.execution_results,
         "signal_text": t.signal_text,
+        "timeline": _timeline(t),
         "executed_at": t.executed_at.isoformat() + "Z" if t.executed_at else None,
         "created_at": t.created_at.isoformat() + "Z" if t.created_at else None,
     }

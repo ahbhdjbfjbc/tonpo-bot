@@ -13,11 +13,13 @@ from core.models import TradeSignal, CalculatedTrade, UnifiedSignal
 from services.signal_processor import SignalProcessor
 #from core.parser import SignalParser
 from services.risk_service import RiskService
+from services.protection import ProtectionService
 from services.subscription import SubscriptionService
 from services.notification import NotificationService
 from database.repositories import TradeRepository, UserRepository
 from database.models import Trade
 from config.settings import settings
+from gateway_client.adapter import GatewayCapabilityUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class TradeExecutor:
         #self.signal_processor = SignalParser()
         
         self.risk_service = RiskService()
+        self.protection = ProtectionService(db_session)
         self.sub_service = SubscriptionService(db_session)
         self.notification = NotificationService(db_session, bot)
         self.trade_repo = TradeRepository(db_session)
@@ -75,10 +78,10 @@ class TradeExecutor:
         # leave an accepted order with no persisted per-leg outcome.
         try:
             bind = self.db.get_bind()
-            schema_ready = (
-                sqlalchemy_inspect(bind).has_table('trades')
-                and sqlalchemy_inspect(bind).has_column('trades', 'execution_results')
-            )
+            inspector = sqlalchemy_inspect(bind)
+            schema_ready = inspector.has_table('trades') and 'execution_results' in {
+                column['name'] for column in inspector.get_columns('trades')
+            }
         except Exception:
             schema_ready = False
         if not schema_ready:
@@ -101,7 +104,8 @@ class TradeExecutor:
             'started_at': datetime.utcnow(),
             'signal': signal_text
         }
-        
+        trade_record = None
+        results = []
         try:
             # Step 1: Parse signal
             logger.info(f"Parsing signal for user {user_id}")
@@ -126,6 +130,31 @@ class TradeExecutor:
             # Step 4: Get connection via ExecutionProvider
             connection = await self._get_connection(user_id)
             account_info = await connection.get_account_information()
+            get_positions = getattr(connection, 'get_positions', None)
+            if get_positions is None:
+                return {
+                    'success': False,
+                    'error': 'Broker positions are unavailable; execution is blocked.',
+                    'status': 'risk_blocked',
+                    'reason_code': 'positions_unavailable',
+                }
+            try:
+                positions = await get_positions()
+            except Exception:
+                return {
+                    'success': False,
+                    'error': 'Broker positions are unavailable; execution is blocked.',
+                    'status': 'risk_blocked',
+                    'reason_code': 'positions_unavailable',
+                }
+            account_limits = self.protection.evaluate_account_limits(user, account_info, positions)
+            if not account_limits['allowed']:
+                return {
+                    'success': False,
+                    'error': account_limits['reason'],
+                    'status': 'risk_blocked',
+                    'reason_code': account_limits['code'],
+                }
             
             # Step 5: Market preflight; never risk or send an order without a valid quote.
             price = await connection.get_symbol_price(signal.symbol)
@@ -145,10 +174,25 @@ class TradeExecutor:
             # metadata. Fail closed instead of inventing lot/tick constraints.
             get_constraints = getattr(connection, 'get_symbol_constraints', None)
             if get_constraints is None:
-                raise TradeExecutionError('Broker symbol constraints are unavailable')
-            broker_constraints = await get_constraints(signal.symbol)
+                return {
+                    'success': False,
+                    'error': 'Broker symbol constraints are unavailable; execution is blocked.',
+                    'status': 'blocked_constraints',
+                }
+            try:
+                broker_constraints = await get_constraints(signal.symbol)
+            except GatewayCapabilityUnavailable:
+                return {
+                    'success': False,
+                    'error': 'Broker symbol constraints are unavailable; execution is blocked.',
+                    'status': 'blocked_constraints',
+                }
             if not broker_constraints:
-                raise TradeExecutionError('Broker symbol constraints are unavailable')
+                return {
+                    'success': False,
+                    'error': 'Broker symbol constraints are unavailable; execution is blocked.',
+                    'status': 'blocked_constraints',
+                }
             
             # Step 6: Calculate risk
             user_settings = {
@@ -202,7 +246,29 @@ class TradeExecutor:
                     'status': 'duplicate'
                 }
             
-            # Step 10: Execute trade
+            # Step 10: Persist a durable intent before any broker mutation.
+            # If the broker call later times out or raises, reconciliation has a
+            # concrete Tonpo record instead of an untracked external side effect.
+            trade_record = Trade(
+                user_id=user.id,
+                order_type=signal.order_type.value,
+                symbol=signal.symbol,
+                entry_price=signal.entry,
+                stop_loss=signal.stop_loss,
+                take_profits=signal.take_profits,
+                position_size=calculated.position_size,
+                risk_percentage=calculated.risk_percentage,
+                risk_amount=calculated.potential_loss,
+                potential_reward=calculated.total_potential_profit,
+                mt_order_ids=[],
+                execution_results=[],
+                status='pending',
+                signal_text=signal_text,
+                signal_hash=self.signal_processor._calculate_hash(signal_text),
+            )
+            self.db.add(trade_record)
+            self.db.commit()
+
             logger.info(f"Executing trade for user {user_id}: {signal}")
             
             trade_data = {
@@ -215,7 +281,6 @@ class TradeExecutor:
             
             # For multiple TPs, we need to split
             if len(signal.take_profits) > 1:
-                results = []
                 step = float(broker_constraints['volume_step'])
                 units = round(calculated.position_size / step)
                 base_units, remainder = divmod(units, len(signal.take_profits))
@@ -235,6 +300,11 @@ class TradeExecutor:
                         result = await self._execute_pending_order(connection, trade_data)
                     
                     results.append(result)
+                    # Never submit another leg after an ambiguous broker result.
+                    if result.get('status') in {'unknown', 'timeout'} or (
+                        not result.get('success') and result.get('status') not in {'rejected'}
+                    ):
+                        break
             else:
                 # Single TP execution
                 if signal.order_type.value in ['Buy', 'Sell']:
@@ -270,27 +340,12 @@ class TradeExecutor:
                 execution_status = ('failed' if all_rejected else 'executed' if all(verified) else
                                     'partial' if any(verified) else 'unknown')
             
-            # Step 11: Save trade to database
-            trade_record = Trade(
-                user_id=user.id,
-                order_type=signal.order_type.value,
-                symbol=signal.symbol,
-                entry_price=signal.entry,
-                stop_loss=signal.stop_loss,
-                take_profits=signal.take_profits,
-                position_size=calculated.position_size,
-                risk_percentage=calculated.risk_percentage,
-                risk_amount=calculated.potential_loss,
-                potential_reward=calculated.total_potential_profit,
-                mt_order_ids=[r.get('orderId') for r in results if r.get('orderId')],
-                execution_results=results,
-                status=execution_status,
-                signal_text=signal_text,
-                signal_hash=self.signal_processor._calculate_hash(signal_text),
-                executed_at=datetime.utcnow() if execution_status == 'executed' else None
-            )
-            self.db.add(trade_record)
-            
+            # Step 11: Finalize the durable intent with broker evidence.
+            trade_record.mt_order_ids = [r.get('orderId') for r in results if r.get('orderId')]
+            trade_record.execution_results = results
+            trade_record.status = execution_status
+            trade_record.executed_at = datetime.utcnow() if execution_status == 'executed' else None
+
             # Step 12: Update user stats
             self.sub_service.increment_trade_count(user_id)
             user.total_volume += calculated.position_size
@@ -347,6 +402,16 @@ class TradeExecutor:
             }
             
         except Exception:
+            self.db.rollback()
+            if trade_record is not None and getattr(trade_record, 'id', None) is not None:
+                try:
+                    persisted = self.db.query(Trade).filter_by(id=trade_record.id).one()
+                    persisted.status = 'unknown'
+                    persisted.execution_results = results
+                    persisted.error_message = 'Execution outcome unknown; reconciliation required.'
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
             logger.error("Trade execution outcome unknown for user %s; error details redacted", user_id)
             try:
                 await self.notification.notify_trade_failed(user_id, 'Execution status unknown', {
@@ -433,18 +498,43 @@ class TradeExecutor:
                 else:
                     signal.entry = float(price['bid'])
             
-            # Calculate risk
+            # Calculate risk only from authoritative broker metadata.
+            get_constraints = getattr(connection, 'get_symbol_constraints', None)
+            if get_constraints is None:
+                return {
+                    'success': False,
+                    'error': 'Broker symbol constraints are unavailable; no executable sizing is shown.',
+                    'status': 'constraints_unavailable',
+                    'executable': False,
+                }
+            try:
+                broker_constraints = await get_constraints(signal.symbol)
+            except GatewayCapabilityUnavailable:
+                return {
+                    'success': False,
+                    'error': 'Broker symbol constraints are unavailable; no executable sizing is shown.',
+                    'status': 'constraints_unavailable',
+                    'executable': False,
+                }
+            if not broker_constraints:
+                return {
+                    'success': False,
+                    'error': 'Broker symbol constraints are unavailable; no executable sizing is shown.',
+                    'status': 'constraints_unavailable',
+                    'executable': False,
+                }
+
             user_settings = {
                 'default_risk_factor': user.default_risk_factor,
                 'max_position_size': user.max_position_size,
                 'symbol_risk_overrides': user.settings.symbol_risk_overrides if user.settings else {}
             }
-            
             calculated = self.risk_service.calculate_trade(
                 signal=signal,
                 balance=account_info['balance'],
                 risk_factor=user.default_risk_factor,
-                user_settings=user_settings
+                user_settings=user_settings,
+                broker_constraints=broker_constraints,
             )
             
             return {
@@ -473,10 +563,10 @@ class TradeExecutor:
             }
             
         except Exception as e:
-            logger.error(f"Calculation failed for user {user_id}: {e}")
+            logger.error("Calculation failed for user %s (%s)", user_id, type(e).__name__)
             return {
                 'success': False,
-                'error': str(e)
+                'error': 'Trade calculation failed'
             }
     
     async def close_trade(self, user_id: int, position_id: str) -> Dict[str, Any]:
@@ -511,10 +601,10 @@ class TradeExecutor:
                 }
                 
         except Exception as e:
-            logger.error(f"Failed to close position for user {user_id}: {e}")
+            logger.error("Failed to close position for user %s (%s)", user_id, type(e).__name__)
             return {
                 'success': False,
-                'error': str(e)
+                'error': 'Position close failed'
             }
     
     async def modify_trade(self, user_id: int, position_id: str,
@@ -540,10 +630,10 @@ class TradeExecutor:
                 }
                 
         except Exception as e:
-            logger.error(f"Failed to modify position for user {user_id}: {e}")
+            logger.error("Failed to modify position for user %s (%s)", user_id, type(e).__name__)
             return {
                 'success': False,
-                'error': str(e)
+                'error': 'Position modification failed'
             }
     
     def get_pending_trades(self, user_id: int) -> List[Dict[str, Any]]:

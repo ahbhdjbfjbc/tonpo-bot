@@ -117,7 +117,7 @@ class QueueService:
             return result.id
             
         except Exception as e:
-            logger.error(f"Failed to send task {task_name}: {e}")
+            logger.error("Failed to send task %s (%s)", task_name, type(e).__name__)
             raise
     
     def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -134,7 +134,7 @@ class QueueService:
             elif result.failed():
                 return {
                     'status': 'failed',
-                    'error': str(result.info)
+                    'error': 'Task failed'
                 }
             else:
                 return {
@@ -142,7 +142,7 @@ class QueueService:
                 }
                 
         except Exception as e:
-            logger.error(f"Failed to get task result {task_id}: {e}")
+            logger.error("Failed to get task result %s (%s)", task_id, type(e).__name__)
             return None
     
     def revoke_task(self, task_id: str, terminate: bool = False) -> bool:
@@ -152,7 +152,7 @@ class QueueService:
             logger.info(f"Task {task_id} revoked")
             return True
         except Exception as e:
-            logger.error(f"Failed to revoke task {task_id}: {e}")
+            logger.error("Failed to revoke task %s (%s)", task_id, type(e).__name__)
             return False
     
     def get_queue_length(self, queue_name: str = 'celery') -> int:
@@ -163,7 +163,7 @@ class QueueService:
                 length = client.llen(queue_name)
                 return length or 0
         except Exception as e:
-            logger.error(f"Failed to get queue length: {e}")
+            logger.error("Failed to get queue length (%s)", type(e).__name__)
             return 0
     
     def clear_queue(self, queue_name: str = 'celery') -> bool:
@@ -175,7 +175,7 @@ class QueueService:
             logger.info(f"Queue {queue_name} cleared")
             return True
         except Exception as e:
-            logger.error(f"Failed to clear queue: {e}")
+            logger.error("Failed to clear queue (%s)", type(e).__name__)
             return False
 
 

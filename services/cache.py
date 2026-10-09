@@ -12,6 +12,37 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+class RateLimitUnavailable(RuntimeError):
+    """Raised when a protected rate-limit decision cannot be verified."""
+
+
+_RATE_LIMIT_SCRIPT = """
+local limit = tonumber(ARGV[1])
+local period = tonumber(ARGV[2])
+local current = redis.call('GET', KEYS[1])
+if current then
+    local numeric = tonumber(current)
+    if not numeric then
+        return {-1, -1}
+    end
+    local current_ttl = redis.call('TTL', KEYS[1])
+    if numeric >= limit then
+        return {0, current_ttl}
+    end
+end
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+if count == 1 or ttl < 0 then
+    redis.call('EXPIRE', KEYS[1], period)
+    ttl = period
+end
+if count > limit then
+    return {0, ttl}
+end
+return {1, ttl}
+"""
+
+
 class CacheService:
     """
     Redis-based caching service
@@ -23,7 +54,7 @@ class CacheService:
     
     def _connect(self):
         """Connect to Redis"""
-        redis_url = settings.REDIS_URL
+        redis_url = getattr(settings, "REDIS_URL", None)
         if not redis_url:
             self.redis_client = None
             logger.info("Redis cache disabled: REDIS_URL is not configured")
@@ -40,7 +71,7 @@ class CacheService:
             self.redis_client.ping()
             logger.info("Connected to Redis")
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            logger.error("Failed to connect to Redis (%s)", type(e).__name__)
             self.redis_client = None
     
     def _ensure_connection(self):
@@ -71,7 +102,7 @@ class CacheService:
             
             return True
         except RedisError as e:
-            logger.error(f"Redis set error: {e}")
+            logger.error("Redis set failed (%s)", type(e).__name__)
             return False
     
     def get(self, key: str, default: Any = None) -> Any:
@@ -87,7 +118,7 @@ class CacheService:
             # Try JSON first
             try:
                 return json.loads(data)
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
                 pass
             
             # Try pickle
@@ -97,7 +128,7 @@ class CacheService:
                 return data.decode() if isinstance(data, bytes) else data
                 
         except RedisError as e:
-            logger.error(f"Redis get error: {e}")
+            logger.error("Redis get failed (%s)", type(e).__name__)
             return default
     
     def delete(self, key: str) -> bool:
@@ -109,7 +140,7 @@ class CacheService:
             self.redis_client.delete(key)
             return True
         except RedisError as e:
-            logger.error(f"Redis delete error: {e}")
+            logger.error("Redis delete failed (%s)", type(e).__name__)
             return False
     
     def exists(self, key: str) -> bool:
@@ -120,7 +151,7 @@ class CacheService:
         try:
             return self.redis_client.exists(key) > 0
         except RedisError as e:
-            logger.error(f"Redis exists error: {e}")
+            logger.error("Redis exists check failed (%s)", type(e).__name__)
             return False
     
     def increment(self, key: str, amount: int = 1) -> Optional[int]:
@@ -131,8 +162,36 @@ class CacheService:
         try:
             return self.redis_client.incr(key, amount)
         except RedisError as e:
-            logger.error(f"Redis increment error: {e}")
+            logger.error("Redis increment failed (%s)", type(e).__name__)
             return None
+
+    def check_rate_limit(self, key: str, limit: int, period: int) -> tuple[bool, int]:
+        """Atomically check and update a protected fixed-window counter."""
+        if limit <= 0 or period <= 0:
+            raise ValueError("rate-limit limit and period must be positive")
+        if not self._ensure_connection():
+            raise RateLimitUnavailable("Redis rate-limit state is unavailable")
+
+        try:
+            result = self.redis_client.eval(
+                _RATE_LIMIT_SCRIPT, 1, key, int(limit), int(period)
+            )
+        except RedisError as exc:
+            logger.error("Redis rate-limit check failed (%s)", type(exc).__name__)
+            raise RateLimitUnavailable("Redis rate-limit state is unavailable") from exc
+
+        if not isinstance(result, (list, tuple)) or len(result) != 2:
+            logger.error("Redis rate-limit check returned malformed state")
+            raise RateLimitUnavailable("Redis rate-limit state is invalid")
+        try:
+            allowed, retry_after = int(result[0]), int(result[1])
+        except (TypeError, ValueError):
+            logger.error("Redis rate-limit check returned non-numeric state")
+            raise RateLimitUnavailable("Redis rate-limit state is invalid")
+        if allowed not in (0, 1) or retry_after < 0:
+            logger.error("Redis rate-limit check returned unsafe state")
+            raise RateLimitUnavailable("Redis rate-limit state is invalid")
+        return bool(allowed), retry_after
     
     def expire(self, key: str, ttl: timedelta) -> bool:
         """Set expiration on a key"""
@@ -142,7 +201,7 @@ class CacheService:
         try:
             return self.redis_client.expire(key, int(ttl.total_seconds()))
         except RedisError as e:
-            logger.error(f"Redis expire error: {e}")
+            logger.error("Redis expire failed (%s)", type(e).__name__)
             return False
     
     def get_or_set(self, key: str, func, ttl: Optional[timedelta] = None) -> Any:
@@ -170,7 +229,7 @@ class CacheService:
                 return self.redis_client.delete(*keys)
             return 0
         except RedisError as e:
-            logger.error(f"Redis clear pattern error: {e}")
+            logger.error("Redis pattern clear failed (%s)", type(e).__name__)
             return 0
     
     def get_stats(self) -> Dict[str, Any]:
@@ -190,7 +249,7 @@ class CacheService:
                 'uptime_days': info.get('uptime_in_days', 0)
             }
         except Exception as e:
-            return {'status': 'error', 'error': str(e)}
+            return {'status': 'error', 'error': 'Redis stats unavailable'}
 
     def close(self) -> None:
         """Release the Redis connection pool during application shutdown."""

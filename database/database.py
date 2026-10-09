@@ -125,7 +125,7 @@ class DatabaseManager:
             db_session.commit()
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Database session error: {e}")
+            logger.error("Database session error (%s)", type(e).__name__)
             raise
         finally:
             db_session.close()

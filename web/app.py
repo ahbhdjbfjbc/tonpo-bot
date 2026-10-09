@@ -9,6 +9,8 @@ Serves:
 from __future__ import annotations
 
 import logging
+import time
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -16,7 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from web.cors import LOCAL_DEVELOPMENT_ORIGINS, resolve_cors_origins
+
 from config.settings import settings
+from web.runtime import initialize_web_execution_provider, shutdown_web_execution_provider
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +35,62 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+
+@app.on_event("startup")
+async def initialize_web_runtime() -> None:
+    """Wire webhook execution in this process; Bot memory is not shared here."""
+    await initialize_web_execution_provider()
+
+
+@app.on_event("shutdown")
+async def shutdown_web_runtime() -> None:
+    await shutdown_web_execution_provider()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=getattr(settings, "CORS_ORIGINS", ["*"]) or ["*"],
+    allow_origins=resolve_cors_origins(
+        getattr(settings, 'CORS_ORIGINS', LOCAL_DEVELOPMENT_ORIGINS)
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def safe_request_diagnostics(request: Request, call_next):
+    """Log request metadata for auth diagnosis without logging credentials."""
+    started = time.perf_counter()
+    body = await request.body()
+    body_present = bool(body)
+    init_data_present = False
+    init_data_length = 0
+    if request.url.path == "/api/auth/telegram-webapp" and body:
+        try:
+            payload = json.loads(body)
+            init_data = payload.get("init_data") if isinstance(payload, dict) else None
+            init_data_present = isinstance(init_data, str) and bool(init_data)
+            init_data_length = len(init_data) if isinstance(init_data, str) else 0
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path == "/static/js/app.js":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+    logger.info(
+        "HTTP request method=%s path=%s status=%s duration_ms=%s body_present=%s "
+        "init_data_present=%s init_data_length=%s content_type=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+        body_present,
+        init_data_present,
+        init_data_length,
+        request.headers.get("content-type", ""),
+    )
+    return response
 
 # Routers
 from web.api.auth import router as auth_router
@@ -53,6 +107,11 @@ from web.api.assistant import router as assistant_router
 from web.api.support import router as support_router
 from web.api.manual_trade import router as manual_trade_router
 from web.api.trading_mode import router as trading_mode_router
+from web.api.results import router as results_router
+from web.api.analytics import router as analytics_router
+from web.api.protection import router as protection_router
+from web.api.subscription import router as subscription_router
+from web.api.public import router as public_router
 
 app.include_router(auth_router)
 app.include_router(webhooks_router)
@@ -68,6 +127,11 @@ app.include_router(assistant_router)
 app.include_router(support_router)
 app.include_router(manual_trade_router)
 app.include_router(trading_mode_router)
+app.include_router(results_router)
+app.include_router(analytics_router)
+app.include_router(protection_router)
+app.include_router(subscription_router)
+app.include_router(public_router)
 
 
 @app.get("/api/health")
@@ -81,7 +145,7 @@ def health():
 
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception):
-    logger.exception("Unhandled error on %s", request.url.path)
+    logger.error("Unhandled error on %s (%s)", request.url.path, type(exc).__name__)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 

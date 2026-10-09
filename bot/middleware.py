@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from database.repositories import UserRepository
 from database.models import AdminRole
-from services.cache import CacheService, CacheKeys
+from services.cache import CacheService, RateLimitUnavailable
 from services.notification import NotificationService
 from services.monitoring import MonitoringService
 from config.settings import settings
@@ -161,25 +161,15 @@ class RateLimitMiddleware:
         except Exception:
         	pass  # Fall back to default limits
         
-        # Create rate limit key
-        key = CacheKeys.rate_limit(user_id, action)
-        
-        # Get current count
-        current = self.cache.get(key, 0)
-        
-        if current >= limit:
-            # Get TTL for retry time
-            ttl = self.cache.redis_client.ttl(key) if self.cache.redis_client else period
-            return False, max(0, ttl)
-        
-        # Increment counter
-        if current == 0:
-            # First request in this period
-            self.cache.set(key, 1, ttl=period)
-        else:
-            self.cache.increment(key)
-        
-        return True, None
+        # The complete decision/update is one Redis-side atomic operation.
+        # Redis failure is deliberately fail-closed for protected handlers.
+        key = f"ratelimit:bot:{user_id}:{action}"
+        try:
+            allowed, retry_after = self.cache.check_rate_limit(key, limit, period)
+        except RateLimitUnavailable:
+            logger.warning("Rate limiting unavailable; rejecting protected action=%s", action)
+            return False, period
+        return allowed, (None if allowed else max(0, retry_after))
     
     def wrap(self, action: str = 'default') -> Callable:
         """
@@ -225,12 +215,10 @@ class ErrorHandler:
         """
         Handle errors raised in dispatcher
         """
-        import traceback
-
-        # Always log full traceback so we can see the real error
+        # Exception messages and tracebacks may contain submitted credentials.
         logger.error(
-            f"Exception while handling an update: {context.error}\n"
-            f"{''.join(traceback.format_exception(type(context.error), context.error, context.error.__traceback__))}",
+            "Exception while handling an update (%s)",
+            type(context.error).__name__,
         )
 
         # Track in monitoring (safe - won't raise)
@@ -244,7 +232,10 @@ class ErrorHandler:
                 }
             )
         except Exception as e:
-            logger.warning(f"Could not log error to monitoring: {e}")
+            logger.warning(
+                "Could not log error to monitoring (%s)",
+                type(e).__name__,
+            )
 
         # Notify user
         try:
@@ -276,7 +267,7 @@ class ErrorHandler:
         error_text = (
             f"⚠️ *Critical Error*\n\n"
             f"Type: {error.__class__.__name__}\n"
-            f"Error: {str(error)[:200]}\n"
+            "Error details are available in the protected server logs.\n"
         )
         
         if update and update.effective_user:

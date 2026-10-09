@@ -7,8 +7,12 @@ from telegram.ext import CallbackContext
 from sqlalchemy.orm import Session
 
 from database.repositories import UserRepository, TradeRepository
+from database.models import SignalReceipt
 from services.notification import NotificationService
 from services.subscription import SubscriptionService
+from services.results import ResultsService
+from services.news_protection import NewsProtectionService
+from services.ai_assistant import answer as assistant_answer
 from utils.formatters import format_balance, format_positions, format_trade_history
 from config.settings import settings
 
@@ -45,13 +49,19 @@ class CommandHandlers:
         
         if db_user:
             _mode_badge = "🟢 LIVE TRADING" if (getattr(db_user, "trading_mode", None) or "demo") == "live" else "🔵 DEMO TRADING"
+            _connection = "متصل" if getattr(db_user, "has_gateway_credentials", False) and getattr(db_user, "mt_connected", False) else "غير متصل"
+            _mode_badge = "🔵 DRY RUN" if getattr(settings, "TRADING_DRY_RUN", True) else _mode_badge
             message = (
                 f"👋 أهلًا بعودتك، {user.first_name}!\n\n"
                 f"{_mode_badge}\n\n"
-                f"حساب MT5 الخاص بك ({db_user.mt5_account_id}) متصل.\n"
+                f"حساب MT5 الخاص بك ({db_user.mt5_account_id or 'غير مربوط'}): {_connection}.\n"
                 f"الخطة: *{db_user.subscription_tier.upper()}*\n\n"
                 "ما الذي ترغب في فعله؟\n"
-                "• /trade - تنفيذ صفقة\n"
+                "• /account - حالة الحساب\n"
+                "• /subscription - حالة وخطط الاشتراك\n"
+                "• /status - الحالة الحالية\n"
+                "• /trades - سجل الصفقات\n"
+                "• /trade - إرسال إشارة للتدفق الآمن\n"
                 "• /balance - عرض الرصيد\n"
                 "• /positions - عرض الصفقات المفتوحة\n"
                 "• /settings - ضبط الإعدادات"
@@ -67,11 +77,14 @@ class CommandHandlers:
             	
         else:
             message = (
-                "🚀 *أهلًا بك في Tonpo Bot!*\n\n"
-                "يساعدك البوت على تنفيذ صفقات الفوركس مباشرةً من Telegram "
-                "إلى حسابك في MetaTrader 5.\n\n"
-                "للبدء، استخدم /register لربط حساب MT5.\n"
-                "استخدم /help لعرض الأوامر."
+                "👋 *أهلًا بك في Tonpo Bot!*\n\n"
+                "Tonpo يتحقق من الإشارة والمخاطر ويحميك من ظروف الأخبار قبل أي قرار تنفيذ.\n\n"
+                "🎁 الحسابات الجديدة المؤهلة تبدأ تجربة مجانية لمدة 3 أيام من الخادم.\n"
+                "1) استخدم /register لربط MT5\n"
+                "2) راجع /status و /subscription\n"
+                "3) تابع /signals و /results\n"
+                "4) اسأل /assistant عن أي خطوة\n\n"
+                "لا توجد وعود أرباح، والمساعد لا ينفذ صفقات."
             )
 
             if user_data.get("pending_referrer_telegram_id"):
@@ -83,7 +96,12 @@ class CommandHandlers:
             	    "استخدم /admin لفتح لوحة المشرف (لا يلزم التسجيل)."
             	)
         
-        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+        from bot.keyboards import get_mini_app_keyboard
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_mini_app_keyboard(),
+        )
     
     async def help(self, update: Update, context: CallbackContext):
         """Handle /help command"""
@@ -102,6 +120,13 @@ class CommandHandlers:
             
             "*الحساب:*\n"
             "/profile - عرض ملفك الشخصي\n"
+            "/account - حالة الحساب\n"
+            "/status - حالة الاتصال والتداول\n"
+            "/trades - سجل الصفقات\n"
+            "/signals - قرارات الإشارات\n"
+            "/results - مركز النتائج\n"
+            "/news - حالة حماية الأخبار\n"
+            "/subscription - حالة وخطط الاشتراك\n"
             "/upgrade - ترقية الاشتراك\n"
             "/referral - الحصول على رابط الإحالة\n\n"
             
@@ -139,6 +164,13 @@ class CommandHandlers:
         
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
         
+    async def assistant(self, update: Update, context: CallbackContext):
+        """Answer product questions with the current user's safe context."""
+        user = self.user_repo.get_by_telegram_id(update.effective_user.id)
+        question = " ".join(getattr(context, "args", []) or []).strip() or "كيف أبدأ؟"
+        result = assistant_answer(question, db=self.db, user=user, lang=getattr(user, "language_code", None) if user else None)
+        await update.message.reply_text(result["reply"])
+
     async def about(self, update: Update, context: CallbackContext):
         """Handle /about command"""
         about_text = (
@@ -240,7 +272,90 @@ class CommandHandlers:
         )
         
         await update.message.reply_text(profile_text, parse_mode=ParseMode.MARKDOWN)
-    
+
+    async def account(self, update: Update, context: CallbackContext):
+        """Alias for the account overview used by the product command menu."""
+        return await self.profile(update, context)
+
+    async def subscription(self, update: Update, context: CallbackContext):
+        """Show the existing subscription plans and current plan marker."""
+        return await self.upgrade(update, context)
+
+    async def status(self, update: Update, context: CallbackContext):
+        """Show a safe, backend-authoritative status snapshot."""
+        user = self.user_repo.get_by_telegram_id(update.effective_user.id)
+        if not user:
+            await update.message.reply_text("لم يتم التسجيل بعد. استخدم /register للبدء.")
+            return
+        dry_run = bool(getattr(settings, "TRADING_DRY_RUN", True))
+        connection = "متصل" if user.has_gateway_credentials and user.mt_connected else "غير متصل"
+        expiry = user.subscription_expiry.strftime("%Y-%m-%d") if user.subscription_expiry else "غير محدد"
+        trial = "غير نشط"
+        if user.trial_end and user.trial_end > datetime.utcnow():
+            trial = f"نشط — متبقٍ {(user.trial_end - datetime.utcnow()).days} يوم"
+        news = NewsProtectionService().system_status()
+        news_label = {"inactive": "SAFE", "active": "PROTECTED", "stale": "STALE", "unavailable": "UNAVAILABLE"}.get(news.get("status"), "غير متاح")
+        await update.message.reply_text(
+            "📊 حالة Tonpo\n\n"
+            f"DRY RUN: {'مفعّل — لا أوامر حقيقية' if dry_run else 'غير مفعّل'}\n"
+            f"MT5: {connection}\n"
+            f"الخطة: {user.subscription_tier.upper()} · تنتهي: {expiry}\n"
+            f"Trial: {trial}\n"
+            f"News Protection: {news_label}\n"
+            f"{news.get('reason', 'لا توجد تفاصيل إضافية.')}",
+        )
+
+    async def trades(self, update: Update, context: CallbackContext):
+        """Alias for the existing history command."""
+        return await self.history(update, context)
+
+    async def results(self, update: Update, context: CallbackContext):
+        """Show real closed-trade results; never fabricate an empty account."""
+        result = ResultsService(self.db).results(update.effective_user.id, "30d")
+        if not result.get("has_data") and not result.get("has_signals"):
+            await update.message.reply_text("📊 لا توجد بيانات للفترة المحددة. ستظهر الإشارات والصفقات الفعلية هنا.")
+            return
+        metrics = result["metrics"]
+        today = ResultsService(self.db).activity(update.effective_user.id)
+        await update.message.reply_text(
+            "📊 *مركز النتائج — آخر 30 يومًا*\n\n"
+            f"الصفقات المغلقة: {metrics['total_closed_trades']}\n"
+            f"الرابحة/الخاسرة: {metrics['winning_trades']} / {metrics['losing_trades']}\n"
+            f"نسبة الفوز: {metrics['win_rate']}%\n"
+            f"إجمالي P/L: {metrics['total_pnl']}\n"
+            f"أقصى تراجع: {metrics['max_drawdown'] if metrics['max_drawdown'] is not None else '—'}\n\n"
+            f"اليوم: {today.get('signals_received', 0)} إشارة، المقبول {today.get('signals_accepted', 0)}، المرفوض {today.get('signals_rejected', 0)}، P/L {today.get('pnl', 0)}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    async def signals(self, update: Update, context: CallbackContext):
+        """Show recent persisted signal decisions and explain only known reasons."""
+        user = self.user_repo.get_by_telegram_id(update.effective_user.id)
+        if not user:
+            await update.message.reply_text("لم يتم التسجيل بعد. استخدم /register للبدء.")
+            return
+        rows = self.db.query(SignalReceipt).filter(SignalReceipt.user_id == user.id).order_by(SignalReceipt.created_at.desc()).limit(10).all()
+        if not rows:
+            await update.message.reply_text("📡 لا توجد إشارات بعد. ستظهر أول إشارة مع قرارها هنا.")
+            return
+        lines = ["📡 آخر قرارات الإشارات"]
+        for row in rows:
+            stamp = row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else '—'
+            reason = f"\n  السبب: {row.rejection_reason}" if row.rejection_reason else ""
+            lines.append(f"• {row.status} · {stamp}{reason}")
+        await update.message.reply_text("\n".join(lines))
+
+    async def news(self, update: Update, context: CallbackContext):
+        """Report the backend news-protection state without making a decision in Telegram."""
+        result = NewsProtectionService().system_status()
+        labels = {"inactive": "SAFE", "active": "PROTECTED", "unavailable": "STALE / UNAVAILABLE", "stale": "STALE / UNAVAILABLE"}
+        label = labels.get(result.get("status"), "غير متاح")
+        await update.message.reply_text(
+            f"📰 News Protection: {label}\n"
+            f"{result.get('reason', 'لا توجد بيانات مؤكدة.')}"
+            + (f"\nحتى: {result['protection_until']}" if result.get('protection_until') else "")
+        )
+
     async def upgrade(self, update: Update, context: CallbackContext):
         """Handle /upgrade command — shows plans dynamically from database"""
         from bot.keyboards import get_plans_keyboard

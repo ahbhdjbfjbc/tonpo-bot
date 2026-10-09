@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +14,9 @@ from core.parser import SignalParser
 from database.models import AdminSetting, SignalReceipt
 from database.repositories import UserRepository
 from services.subscription import SubscriptionService
+from services.news_protection import NewsProtectionService
+from services.protection import ProtectionService
+from services.notification import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,17 @@ class SignalPipeline:
         self.parser = SignalParser()
         self.users = UserRepository(db)
         self.subscriptions = SubscriptionService(db)
+        self.news = NewsProtectionService()
+        self.protection = ProtectionService(db)
+        self.notifications = NotificationService(db, getattr(executor, "bot", None))
+
+    @staticmethod
+    def _reject(receipt, status: str, reason: str, *, news_status: str | None = None) -> dict:
+        receipt.status = status
+        receipt.rejection_reason = reason[:255]
+        if news_status is not None:
+            receipt.news_status = news_status
+        return {'success': False, 'status': status, 'error': reason, 'receipt_id': receipt.id}
 
     @staticmethod
     def authenticate_tradingview(provided_secret):
@@ -85,8 +100,15 @@ class SignalPipeline:
             f'{canonical}:{time_bucket}'.encode()
         ).hexdigest()
         key = hashlib.sha256(f'{unified.source}:{source_key}'.encode()).hexdigest()
-        receipt = SignalReceipt(user_id=user.id, source=unified.source, idempotency_key=key,
-                                signal_text=unified.payload, status='received')
+        receipt = SignalReceipt(
+            user_id=user.id, source=unified.source, idempotency_key=key,
+            signal_text=unified.payload, status='received',
+            validation_status='passed', signal_id=external_id or key,
+            account_id=getattr(user, 'gateway_account_id', None) or getattr(user, 'gateway_user_id', None),
+            direction=getattr(signal, 'direction', None), entry_price=signal.entry,
+            stop_loss=signal.stop_loss, take_profits=list(signal.take_profits),
+            signal_timestamp=unified.received_at.replace(tzinfo=None),
+        )
         self.db.add(receipt)
         try:
             self.db.commit()
@@ -103,17 +125,12 @@ class SignalPipeline:
         if errors:
             return {'success': False, 'status': 'invalid', 'error': '; '.join(errors)}
         envelope.payload = self._render(signal)
-        signal.metadata = {'source': envelope.source}
+        signal.metadata = {**dict(envelope.metadata or {}), 'source': envelope.source}
         if envelope.user_id is None:
             return {'success': False, 'status': 'unauthenticated', 'error': 'Signal target is required'}
         user = self.users.get_by_telegram_id(envelope.user_id)
         if not user or not user.is_active or not user.is_verified or user.is_banned:
             return {'success': False, 'status': 'unauthorized', 'error': 'Trading account is unavailable'}
-        if user.allowed_symbols and signal.symbol not in user.allowed_symbols:
-            return {'success': False, 'status': 'invalid', 'error': 'Symbol is not enabled for this account'}
-        if signal.symbol in (user.blocked_symbols or []):
-            return {'success': False, 'status': 'invalid', 'error': 'Symbol is blocked for this account'}
-
         if existing_receipt is not None:
             if existing_receipt.user_id != user.id:
                 return {'success': False, 'status': 'unauthorized', 'error': 'Confirmation is not available'}
@@ -135,16 +152,63 @@ class SignalPipeline:
         else:
             receipt, duplicate = self._claim(user, envelope, signal)
             if duplicate:
+                if receipt.status == 'unknown':
+                    return {'success': False, 'status': 'unknown', 'error': 'Execution state is unknown; reconciliation is required', 'receipt_id': receipt.id, 'reconciliation_required': True}
                 return {'success': False, 'status': 'duplicate', 'receipt_id': receipt.id}
+
+        if user.allowed_symbols and signal.symbol not in user.allowed_symbols:
+            result = self._reject(receipt, 'invalid', 'Symbol is not enabled for this account')
+            self.db.commit()
+            return result
+        if signal.symbol in (user.blocked_symbols or []):
+            result = self._reject(receipt, 'invalid', 'Symbol is blocked for this account')
+            self.db.commit()
+            return result
+
+        news = self.news.assess(signal.symbol)
+        receipt.news_status = news['status']
+        receipt.final_decision = 'rejected' if news['status'] in {'active', 'unavailable', 'stale'} else None
+        if news['status'] == 'active':
+            result = self._reject(receipt, 'news_blocked', news['reason'], news_status='active')
+            receipt.protection_reason = news['reason'][:255]
+            self.db.commit()
+            await self.notifications.notify_event(envelope.user_id, 'signal_rejected', title='Signal rejected', message=news['reason'], data={'signal_id': receipt.signal_id, 'reason': news['reason']}, event_key=f'signal:{receipt.id}:news')
+            return result
+        if news['status'] == 'unavailable':
+            result = self._reject(receipt, 'news_unavailable', news['reason'], news_status='unavailable')
+            receipt.protection_reason = news['reason'][:255]
+            self.db.commit()
+            await self.notifications.notify_event(envelope.user_id, 'signal_rejected', title='Signal rejected', message=news['reason'], data={'signal_id': receipt.signal_id, 'reason': news['reason']}, event_key=f'signal:{receipt.id}:news')
+            return result
+        if news['status'] == 'stale':
+            result = self._reject(receipt, 'news_stale', news['reason'], news_status='stale')
+            receipt.protection_reason = news['reason'][:255]
+            self.db.commit()
+            await self.notifications.notify_event(envelope.user_id, 'signal_rejected', title='Signal rejected', message=news['reason'], data={'signal_id': receipt.signal_id, 'reason': news['reason']}, event_key=f'signal:{receipt.id}:news')
+            return result
+        protection = self.protection.evaluate(user, signal)
+        receipt.risk_status = 'passed' if protection['allowed'] else 'blocked'
+        receipt.risk_reason = protection['reason'][:255]
+        if not protection['allowed']:
+            receipt.final_decision = 'rejected'
+            receipt.status = 'risk_blocked'
+            receipt.rejection_reason = protection['reason'][:255]
+            receipt.protection_reason = protection['reason'][:255]
+            self.db.commit()
+            await self.notifications.notify_event(envelope.user_id, 'signal_rejected', title='Signal rejected', message=protection['reason'], data={'signal_id': receipt.signal_id, 'reason_code': protection['code']}, event_key=f'signal:{receipt.id}:protection')
+            return {'success': False, 'status': 'blocked' if protection['code'] == 'kill_switch' else 'risk_blocked', 'error': protection['reason'], 'reason_code': protection['code'], 'receipt_id': receipt.id}
+
         can_trade, limit = self.subscriptions.check_trade_limit(envelope.user_id)
         if not can_trade:
             receipt.status = 'rejected_subscription'
+            receipt.rejection_reason = 'Daily subscription trade limit reached'
             self.db.commit()
             return {'success': False, 'status': 'limit_reached', 'limit_info': limit}
 
         mode = user.trade_mode or 'manual'
         if mode not in {'manual', 'semi_auto', 'auto'}:
             receipt.status = 'rejected_mode'
+            receipt.rejection_reason = 'Trading mode is invalid'
             self.db.commit()
             return {'success': False, 'status': 'rejected_mode', 'error': 'Invalid trade mode'}
         if envelope.source != 'manual' and mode == 'manual' and not confirmed:
@@ -159,6 +223,7 @@ class SignalPipeline:
             return {'success': False, 'status': 'confirmation_required', 'receipt_id': receipt.id}
         if mode == 'auto' and not self.subscriptions.check_feature_access(envelope.user_id, 'auto_trading'):
             receipt.status = 'rejected_subscription'
+            receipt.rejection_reason = 'Auto trading is not included in this subscription'
             self.db.commit()
             return {'success': False, 'status': 'subscription_required', 'error': 'Auto trading is not included in this plan'}
         if envelope.source == 'manual' and not confirmed:
@@ -166,20 +231,12 @@ class SignalPipeline:
             self.db.commit()
             return {'success': False, 'status': 'confirmation_required', 'receipt_id': receipt.id}
 
-        # The explicit kill switch is checked after authentication and policy checks;
-        # no gateway/account connection or mutating request is made in dry-run mode.
-        if getattr(settings, 'TRADING_DRY_RUN', True):
-            receipt.status = 'dry_run'
-            self.db.commit()
-            mode = 'demo'
-            try:
-                u = self.users.get_by_telegram_id(envelope.user_id) if hasattr(self, 'users') else None
-                if u is not None:
-                    mode = getattr(u, 'trading_mode', None) or 'demo'
-            except Exception:
-                mode = 'demo'
-            return {'success': False, 'status': 'dry_run', 'error': 'Trading is disabled in dry-run mode',
-                    'receipt_id': receipt.id, 'signal': signal.to_dict(), 'user_trading_mode': mode}
+        receipt.final_decision = 'accepted'
+        receipt.status = 'execution'
+        self.db.commit()
+
+        # Execution always crosses the single TradeExecutor boundary.
+        # TradeExecutor enforces TRADING_DRY_RUN before any broker/provider access.
 
         # Fail closed if the persistent emergency-stop state is unavailable.
         try:
@@ -199,15 +256,22 @@ class SignalPipeline:
                     'error': 'Emergency stop is active'}
 
         try:
+            started = time.perf_counter()
             result = await self.executor.execute_trade(envelope.user_id, envelope.payload,
                                                        {'source': envelope.source, 'receipt_id': receipt.id})
+            receipt.execution_latency_ms = round((time.perf_counter() - started) * 1000, 3)
             receipt.status = result.get('status', 'unknown')
             receipt.trade_uuid = result.get('trade_id')
+            receipt.final_decision = 'executed' if result.get('success') else 'failed' if result.get('status') != 'unknown' else 'unknown'
+            if not result.get('success') and result.get('error'):
+                receipt.rejection_reason = str(result['error'])[:255]
             self.db.commit()
+            event = 'signal_executed' if result.get('success') else 'execution_unknown' if result.get('status') == 'unknown' else 'execution_failed'
+            await self.notifications.notify_event(envelope.user_id, event, title='Signal decision', message=str(result.get('error') or result.get('status') or 'Execution result'), data={'signal_id': receipt.signal_id, 'status': receipt.status}, event_key=f'signal:{receipt.id}:result')
             return result
-        except Exception:
+        except Exception as exc:
             self.db.rollback()
-            logger.exception('Unified signal processing failed')
+            logger.error('Unified signal processing failed (%s)', type(exc).__name__)
             return {'success': False, 'status': 'unknown', 'error': 'Signal processing result is unknown'}
 
     async def confirm(self, telegram_user_id, receipt_id):

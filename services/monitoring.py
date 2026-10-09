@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import os
 
 from database.models import SystemMetric, User, Trade, ConnectionLog
@@ -66,20 +67,20 @@ class MonitoringService:
                 'processes': len(psutil.pids())
             }
         except Exception as e:
-            logger.error(f"Failed to get system info: {e}")
-            return {'error': str(e)}
+            logger.error("Failed to get system info (%s)", type(e).__name__)
+            return {'error': 'System information unavailable'}
     
     def _get_db_health(self) -> Dict[str, Any]:
         """Check database health"""
         try:
             # Test query
             start = datetime.utcnow()
-            result = self.db.execute("SELECT 1").scalar()
+            result = self.db.execute(text("SELECT 1")).scalar()
             query_time = (datetime.utcnow() - start).total_seconds() * 1000
             
             # Get connection count
             connection_count = self.db.execute(
-                "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'"
+                text("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'")
             ).scalar() if 'postgresql' in str(self.db.bind.url) else 0
             
             return {
@@ -91,7 +92,7 @@ class MonitoringService:
         except Exception as e:
             return {
                 'status': 'error',
-                'error': str(e)
+                'error': 'Database health check failed'
             }
     
     def _check_services(self) -> Dict[str, str]:
@@ -137,7 +138,7 @@ class MonitoringService:
             logger.info("System metrics collected")
             
         except Exception as e:
-            logger.error(f"Failed to collect metrics: {e}")
+            logger.error("Failed to collect metrics (%s)", type(e).__name__)
             self.db.rollback()
     
     def _count_trades_last_24h(self) -> int:
@@ -232,7 +233,8 @@ class MonitoringService:
     
     def log_error(self, error: Exception, context: Dict[str, Any] = None):
         """Log an error for monitoring"""
-        logger.error(f"Error logged: {error}", exc_info=True)
+        # Error messages/tracebacks can contain user-submitted credentials.
+        logger.error("Error logged (%s)", type(error).__name__)
 
         try:
             # If the session is in a failed state from a previous exception,
@@ -251,7 +253,10 @@ class MonitoringService:
             self.db.commit()
         except Exception as db_err:
             # Don't let error-logging errors crash the error handler
-            logger.warning(f"Failed to persist error metric to DB: {db_err}")
+            logger.warning(
+                "Failed to persist error metric to DB (%s)",
+                type(db_err).__name__,
+            )
             try:
                 self.db.rollback()
             except Exception:

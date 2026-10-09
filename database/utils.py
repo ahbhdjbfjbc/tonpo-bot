@@ -6,6 +6,7 @@ import json
 from datetime import datetime, date
 from typing import Any
 import logging
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,10 @@ def test_connection(engine) -> bool:
     """
     try:
         with engine.connect() as conn:
-            conn.execute("SELECT 1")
+            conn.execute(text("SELECT 1"))
         return True
     except Exception as e:
-        logger.error(f"Database connection test failed: {e}")
+        logger.error("Database connection test failed (%s)", type(e).__name__)
         return False
 
 
@@ -128,7 +129,8 @@ def get_table_stats(session) -> dict:
     stats = {}
     
     for table_name in inspector.get_table_names():
-        result = session.execute(f"SELECT COUNT(*) FROM {table_name}")
+        # Table names come from SQLAlchemy's inspector, not user input.
+        result = session.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
         count = result.scalar()
         stats[table_name] = count
     
@@ -143,7 +145,7 @@ def vacuum_analyze(session):
         session: SQLAlchemy session
     """
     if session.bind.dialect.name == 'postgresql':
-        session.execute("VACUUM ANALYZE")
+        session.execute(text("VACUUM ANALYZE"))
         session.commit()
         logger.info("VACUUM ANALYZE completed")
     else:

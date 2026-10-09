@@ -9,10 +9,9 @@ if not __package__:
 import logging
 import asyncio
 import warnings
-import json
-from aiohttp import web  # مكتبة الويب اللي ضفناها
 from telegram.warnings import PTBUserWarning
 from telegram import BotCommand
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ConversationHandler, MessageHandler, filters
@@ -23,6 +22,7 @@ from database.database import db_manager
 from bot.handlers import CommandHandlers
 from database.repositories import UserRepository
 from services.subscription import SubscriptionService
+from services.announcements import AnnouncementService
 from bot.registration import RegistrationHandler
 from bot.trading import TradingHandler
 from bot.settings import SettingsHandler
@@ -36,7 +36,6 @@ from services.monitoring import MonitoringService
 from database.db_persistence import DBPersistence
 from gateway_client import ExecutionProvider
 from core.models import UnifiedSignal
-from core.exceptions import SignalParseError
 from services.signal_pipeline import SignalPipeline
 try:
     from web.runtime import set_runtime
@@ -46,6 +45,21 @@ except ImportError:
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _telegram_request() -> HTTPXRequest:
+    """Build a bounded Telegram HTTP client without inheriting hidden proxies."""
+    proxy = getattr(settings, "TELEGRAM_PROXY", None) or None
+    return HTTPXRequest(
+        connect_timeout=float(getattr(settings, "TELEGRAM_CONNECT_TIMEOUT", 15.0)),
+        read_timeout=float(getattr(settings, "TELEGRAM_READ_TIMEOUT", 15.0)),
+        write_timeout=float(getattr(settings, "TELEGRAM_WRITE_TIMEOUT", 15.0)),
+        pool_timeout=float(getattr(settings, "TELEGRAM_POOL_TIMEOUT", 5.0)),
+        proxy=proxy,
+        # Keep HTTPX's working environment-aware transport path. A previous
+        # diagnostic showed that disabling it cannot reach Telegram here.
+        httpx_kwargs={"trust_env": True},
+    )
 
 class Bot:
     """
@@ -81,6 +95,8 @@ class Bot:
         self.application = (
             ApplicationBuilder()
             .token(settings.BOT_TOKEN)
+            .request(_telegram_request())
+            .get_updates_request(_telegram_request())
             .persistence(persistence)
             .post_init(self._post_init)
             .post_shutdown(self._post_shutdown)
@@ -121,6 +137,7 @@ class Bot:
         app.add_handler(CommandHandler("start", self.command_handlers.start))
         app.add_handler(CommandHandler("help",  self.command_handlers.help))
         app.add_handler(CommandHandler("about", self.command_handlers.about))
+        app.add_handler(CommandHandler("assistant", getattr(self.command_handlers, "assistant", self.command_handlers.help)))
         app.add_handler(CommandHandler("referral", self.command_handlers.referral))
         app.add_handler(CommandHandler("support", self.admin.open_support_ticket))
 
@@ -210,10 +227,17 @@ class Bot:
             ("balance",   self.command_handlers.balance),
             ("positions", self.command_handlers.positions),
             ("history",   self.command_handlers.history),
+            ("trades",    getattr(self.command_handlers, "trades", self.command_handlers.history)),
+            ("signals",   getattr(self.command_handlers, "signals", self.command_handlers.history)),
+            ("results",   getattr(self.command_handlers, "results", self.command_handlers.profile)),
+            ("news",      getattr(self.command_handlers, "news", self.command_handlers.profile)),
             ("profile",   self.command_handlers.profile),
+            ("account",   getattr(self.command_handlers, "account", self.command_handlers.profile)),
+            ("status",    getattr(self.command_handlers, "status", self.command_handlers.profile)),
             ("upgrade",   self.command_handlers.upgrade),
+            ("subscription", getattr(self.command_handlers, "subscription", self.command_handlers.upgrade)),
         ]:
-            callback = self.auth_middleware.wrap(handler) if cmd in {"balance", "positions", "history"} else handler
+            callback = self.auth_middleware.wrap(handler) if cmd in {"balance", "positions", "history", "trades", "status"} else handler
             app.add_handler(CommandHandler(cmd, callback))
 
         # Callback query router
@@ -225,23 +249,8 @@ class Bot:
     # بداية الأكواد الجديدة الخاصة بـ TradingView Webhook
     # ==============================================================
     async def tv_webhook_handler(self, request):
-        """Authenticate and route TradingView alerts through the common pipeline."""
-        try:
-            provided = request.headers.get('X-TradingView-Secret', '')
-            if not SignalPipeline.authenticate_tradingview(provided):
-                return web.json_response({'error': 'unauthorized'}, status=401)
-            data = await request.json()
-            user_id = int(data.get('user_id'))
-            envelope = UnifiedSignal(source='tradingview', payload=json.dumps(data), user_id=user_id,
-                                     external_id=str(data.get('id') or '') or None)
-            result = await SignalPipeline(self.db, self.trading.trade_executor).process(envelope)
-            status = 200 if result.get('status') in {'dry_run', 'executed', 'partial', 'confirmation_required', 'manual_review'} else 400
-            return web.json_response({'status': result.get('status')}, status=status)
-        except (json.JSONDecodeError, TypeError, ValueError, SignalParseError):
-            return web.json_response({'error': 'invalid payload'}, status=400)
-        except Exception:
-            logger.error('TradingView signal processing failed', exc_info=True)
-            return web.json_response({'error': 'internal error'}, status=500)
+        """Legacy compatibility hook; the FastAPI route is the sole webhook ingress."""
+        return {"error": "TradingView webhook is served by the web application"}
 
     async def telegram_channel_signal(self, update, context):
         """Accept channel signals only from explicitly allowlisted Telegram chats."""
@@ -262,21 +271,16 @@ class Bot:
                 if result.get('status') not in {'duplicate', 'dry_run'}:
                     await self.notification.send_telegram(user.telegram_id,
                                                           f"إشارة قناة جديدة: {result.get('status', 'unknown')}")
-            except Exception:
-                logger.exception('Telegram channel signal routing failed')
+            except Exception as exc:
+                logger.error(
+                    'Telegram channel signal routing failed for user %s (%s)',
+                    user.telegram_id,
+                    type(exc).__name__,
+                )
 
     async def start_tv_server(self):
-        """دالة لتشغيل سيرفر الويب الخاص باستقبال الإشارات"""
-        app = web.Application()
-        app.router.add_post('/webhook', self.tv_webhook_handler)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        
-        # تشغيل السيرفر على بورت 8080 (أو حسب المنصة مثل Render/Railway)
-        site = web.TCPSite(runner, settings.TRADINGVIEW_WEBHOOK_HOST,
-                            settings.TRADINGVIEW_WEBHOOK_PORT)
-        await site.start()
-        logger.info("TradingView webhook listening on configured port %s", settings.TRADINGVIEW_WEBHOOK_PORT)
+        """Compatibility hook; FastAPI owns the single TradingView ingress."""
+        logger.info("TradingView ingress is served by the authenticated FastAPI route")
     # ==============================================================
     # نهاية الأكواد الجديدة
     # ==============================================================
@@ -286,8 +290,8 @@ class Bot:
         logger.info("Initializing async services...")
         
         # The authenticated ingress may stay available in dry-run; execution remains blocked.
-        if settings.ENABLE_WEBHOOKS and settings.TRADINGVIEW_WEBHOOK_SECRET:
-            asyncio.create_task(self.start_tv_server())
+        # The web application owns the single TradingView ingress. Do not start
+        # a second aiohttp webhook server with a separate pipeline.
         
         # Avoid even opening a gateway connection during a dry run.
         if not settings.TRADING_DRY_RUN:
@@ -295,8 +299,8 @@ class Bot:
                 await self.execution_provider.initialize(settings.gateway_config)
                 self._load_gateway_credentials()
                 logger.info("Gateway initialized successfully")
-            except Exception as e:
-                logger.error(f"Gateway initialization failed: {e}")
+            except Exception as exc:
+                logger.error('Gateway initialization failed (%s)', type(exc).__name__)
         else:
             logger.info("Dry-run enabled: gateway trade execution is disabled")
 
@@ -322,6 +326,7 @@ class Bot:
             BotCommand("start",     "بدء البوت"),
             BotCommand("help",      "عرض المساعدة"),
             BotCommand("about",     "معلومات عن البوت"),
+            BotCommand("assistant", "مساعد Tonpo للإرشاد"),
             BotCommand("register",  "تسجيل حساب MT5"),
             BotCommand("trade",     "إنشاء صفقة"),
             BotCommand("calculate", "حساب المخاطر دون تداول"),
@@ -350,7 +355,7 @@ class Bot:
                     scope=BotCommandScopeChat(chat_id=admin_id)
                 )
             except Exception as e:
-                logger.warning(f"Could not set admin commands for {admin_id}: {e}")
+                logger.warning("Could not set admin commands for %s (%s)", admin_id, type(e).__name__)
 
         # Keep the first Telegram smoke test limited to incoming commands.
         if not settings.TRADING_DRY_RUN:
@@ -664,38 +669,38 @@ class Bot:
                     f"*Send exactly this amount to:*\n"
                     f"`{result['wallet_address']}`\n\n"
                     f"⚠️ *Send EXACTLY `{result['amount']}` {currency}*\n"
-                    f"The unique amount identifies your payment.\n\n"
+                    f"The unique amount identifies your pending request; it is not payment confirmation.\n\n"
                     f"⏰ Expires in {result['expires_in_minutes']} minutes\n\n"
-                    f"Your plan will activate automatically once "
-                    f"the transaction is confirmed on-chain.",
+                    f"Submit your transaction proof for manual administrator review.\n"
+                    f"No plan access is granted until an authorized admin approves it.",
                     parse_mode='Markdown',
                     reply_markup=get_payment_pending_keyboard(result['payment_id'])
                 )
                 
-            except Exception as e:
-                await query.edit_message_text(f"❌ تعذر إنشاء عملية الدفع: {e}")
+            except Exception as exc:
+                logger.warning("Payment request creation failed for user %s (%s)", user_id, type(exc).__name__)
+                await query.edit_message_text("❌ تعذر إنشاء عملية الدفع. يرجى المحاولة لاحقًا.")
             return
         
         if data.startswith('pay_check_'):
             payment_id = data.replace('pay_check_', '')
-            pending = payment_service.get_pending_payment(user_id)
-            
+            pending = payment_service.get_pending_payment(user_id, payment_id)
+
             if not pending:
                 await query.edit_message_text(
-                    "✅ No pending payment found.\n\n"
-                    "Your plan may have already been activated, "
-                    "or the payment expired.\n\n"
-                    "Use /upgrade to try again."
+                    "⚠️ لا توجد عملية دفع معلّقة قابلة للمراجعة.\n\n"
+                    "قد تكون منتهية أو ملغاة. لا يتم تفعيل الاشتراك إلا بعد موافقة الإدارة."
                 )
             else:
                 await query.answer(
-                    f"⏳ Still waiting... {pending['minutes_left']} min left",
+                    f"⏳ Submitted for manual admin review ({pending['expires_in_minutes']} min)",
                     show_alert=True
                 )
             return
-        
+
         if data.startswith('pay_cancel_'):
-            payment_service._cancel_pending(user.id)
+            payment_id = data.replace('pay_cancel_', '')
+            payment_service._cancel_pending(user.id, payment_id)
             await query.edit_message_text(
                 "❌ Payment cancelled.\n\nUse /upgrade to try again."
             )
@@ -713,7 +718,7 @@ class Bot:
                         logger.info(f"Background task {coro_fn.__name__} cancelled")
                         break
                     except Exception as e:
-                        logger.error(f"Background task error in {coro_fn.__name__}: {e}")
+                        logger.error("Background task %s failed (%s)", coro_fn.__name__, type(e).__name__)
                         await asyncio.sleep(5)
             except asyncio.CancelledError:
                 logger.info(f"run_every task cancelled")
@@ -727,25 +732,34 @@ class Bot:
                 if count > 0:
                     logger.info(f"Processed {count} expired subscriptions")
             except Exception as e:
-                logger.error(f"Error processing expired subscriptions: {e}")
+                logger.error("Error processing expired subscriptions (%s)", type(e).__name__)
 
         async def collect_metrics():
             try:
                 self.monitoring.collect_metrics()
             except Exception as e:
-                logger.error(f"Error collecting metrics: {e}")
+                logger.error("Error collecting metrics (%s)", type(e).__name__)
         
         async def check_expiry_warnings():
             try:
                 await self.notification.check_subscription_expiry()
             except Exception as e:
-                logger.error(f"Error checking subscription expiry: {e}")
+                logger.error("Error checking subscription expiry (%s)", type(e).__name__)
+
+        async def deliver_daily_announcements():
+            try:
+                result = await AnnouncementService(self.db).deliver_cycle(self.bot)
+                if result.get("sent") or result.get("failed"):
+                    logger.info("Daily announcements cycle=%s sent=%s failed=%s", result.get("cycle"), result.get("sent"), result.get("failed"))
+            except Exception as e:
+                logger.error("Error delivering daily announcements (%s)", type(e).__name__)
         
         tasks = [
             asyncio.create_task(run_every(self._check_connections, 300), name="check_connections"),
             asyncio.create_task(run_every(collect_metrics, 900), name="collect_metrics"),
             asyncio.create_task(run_every(process_expired, 86400), name="process_expired"),
             asyncio.create_task(run_every(check_expiry_warnings, 43200), name="check_expiry_warnings"),
+            asyncio.create_task(run_every(deliver_daily_announcements, 86400), name="deliver_daily_announcements"),
         ]
         
         try:
@@ -767,8 +781,8 @@ class Bot:
                 if not self.execution_provider:
                     return
                 await self.execution_provider.get_connection(user.telegram_id)
-            except Exception as e:
-                logger.warning(f"Connection check failed for user {user.telegram_id}: {e}")
+            except Exception as exc:
+                logger.warning('Connection check failed for user %s (%s)', user.telegram_id, type(exc).__name__)
                 await self.notification.send_telegram(
                     user.telegram_id,
                     "⚠️ *Connection Alert*\n\nUnable to connect to your MT5 account. "
@@ -788,14 +802,15 @@ class Bot:
         loaded = 0
         for user in gateway_users:
             try:
+                from services.auth import decrypt_gateway_api_key
                 self.execution_provider.gateway_manager.load_user_credentials(
                     telegram_id=user.telegram_id,
-                    api_key=user.gateway_api_key,
+                    api_key=decrypt_gateway_api_key(user.gateway_api_key),
                     gateway_account_id=user.gateway_account_id,
                 )
                 loaded += 1
-            except Exception as e:
-                logger.warning(f"Failed to load gateway credentials for user {user.telegram_id}: {e}")
+            except Exception as exc:
+                logger.warning('Failed to load gateway credentials for user %s (%s)', user.telegram_id, type(exc).__name__)
                 
         logger.info(f"Loaded gateway credentials for {loaded} users")
 

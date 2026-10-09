@@ -12,7 +12,7 @@ Internal implementation now delegates entirely to TonpoClient.
 """
 import asyncio
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from tonpo import (
     TonpoClient,
@@ -26,6 +26,11 @@ from tonpo import (
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+class GatewayCapabilityUnavailable(RuntimeError):
+    """Raised when the configured gateway cannot provide required metadata."""
+
 
 
 def _execution_result(result: Any) -> Dict[str, Any]:
@@ -53,10 +58,18 @@ class TonpoConnectionAdapter:
         self.user_id = user_id
         self._connected = True
 
+    async def _request(self, operation: str, method: Callable, *args, **kwargs):
+        """Call the gateway without exposing provider errors that may contain credentials."""
+        try:
+            return await method(*args, **kwargs)
+        except Exception as exc:
+            logger.error('Gateway operation %s failed (%s)', operation, type(exc).__name__)
+            raise RuntimeError(f'Gateway operation failed: {operation}') from None
+
     # ── Account ──────────────────────────────────────────────────────────────
 
     async def get_account_information(self) -> Dict[str, Any]:
-        info = await self.client.get_account_info()
+        info = await self._request('account_info', self.client.get_account_info)
         return {
             'login':        info.login,
             'name':         info.name,
@@ -72,7 +85,7 @@ class TonpoConnectionAdapter:
         }
 
     async def get_positions(self) -> List[Dict[str, Any]]:
-        positions = await self.client.get_positions()
+        positions = await self._request('positions', self.client.get_positions)
         return [{
             'id':           p.ticket,
             'symbol':       p.symbol,
@@ -100,7 +113,7 @@ class TonpoConnectionAdapter:
         sl: Optional[float] = None, tp: Optional[float] = None,
         comment: Optional[str] = None, magic: Optional[int] = None
     ) -> Dict[str, Any]:
-        result = await self.client.place_market_buy(
+        result = await self._request('market_buy', self.client.place_market_buy,
             symbol, volume=volume, sl=sl, tp=tp, comment=comment, magic=magic
         )
         return _execution_result(result)
@@ -110,7 +123,7 @@ class TonpoConnectionAdapter:
         sl: Optional[float] = None, tp: Optional[float] = None,
         comment: Optional[str] = None, magic: Optional[int] = None
     ) -> Dict[str, Any]:
-        result = await self.client.place_market_sell(
+        result = await self._request('market_sell', self.client.place_market_sell,
             symbol, volume=volume, sl=sl, tp=tp, comment=comment, magic=magic
         )
         return _execution_result(result)
@@ -122,7 +135,7 @@ class TonpoConnectionAdapter:
         sl: Optional[float] = None, tp: Optional[float] = None,
         comment: Optional[str] = None, magic: Optional[int] = None
     ) -> Dict[str, Any]:
-        result = await self.client.place_limit_buy(
+        result = await self._request('limit_buy', self.client.place_limit_buy,
             symbol, volume=volume, price=price, sl=sl, tp=tp,
             comment=comment, magic=magic
         )
@@ -133,7 +146,7 @@ class TonpoConnectionAdapter:
         sl: Optional[float] = None, tp: Optional[float] = None,
         comment: Optional[str] = None, magic: Optional[int] = None
     ) -> Dict[str, Any]:
-        result = await self.client.place_limit_sell(
+        result = await self._request('limit_sell', self.client.place_limit_sell,
             symbol, volume=volume, price=price, sl=sl, tp=tp,
             comment=comment, magic=magic
         )
@@ -146,7 +159,7 @@ class TonpoConnectionAdapter:
         sl: Optional[float] = None, tp: Optional[float] = None,
         comment: Optional[str] = None, magic: Optional[int] = None
     ) -> Dict[str, Any]:
-        result = await self.client.place_stop_buy(
+        result = await self._request('stop_buy', self.client.place_stop_buy,
             symbol, volume=volume, price=price, sl=sl, tp=tp,
             comment=comment, magic=magic
         )
@@ -157,7 +170,7 @@ class TonpoConnectionAdapter:
         sl: Optional[float] = None, tp: Optional[float] = None,
         comment: Optional[str] = None, magic: Optional[int] = None
     ) -> Dict[str, Any]:
-        result = await self.client.place_stop_sell(
+        result = await self._request('stop_sell', self.client.place_stop_sell,
             symbol, volume=volume, price=price, sl=sl, tp=tp,
             comment=comment, magic=magic
         )
@@ -166,14 +179,14 @@ class TonpoConnectionAdapter:
     # ── Position management ───────────────────────────────────────────────────
 
     async def close_position(self, position_id: str) -> bool:
-        result = await self.client.close_position(ticket=int(position_id))
+        result = await self._request('close_position', self.client.close_position, ticket=int(position_id))
         return result.success
 
     async def modify_position(
         self, position_id: str,
         sl: Optional[float] = None, tp: Optional[float] = None
     ) -> bool:
-        result = await self.client.modify_position(
+        result = await self._request('modify_position', self.client.modify_position,
             ticket=int(position_id), sl=sl, tp=tp
         )
         return result.success
@@ -187,13 +200,23 @@ class TonpoConnectionAdapter:
         WebSocket price cache when the REST endpoint returns zeros.
         """
         try:
-            price = await self.client.get_symbol_price(symbol)
+            price = await self._request('symbol_price', self.client.get_symbol_price, symbol)
             return {'bid': price.bid, 'ask': price.ask}
-        except Exception as e:
-            logger.warning(f"get_symbol_price({symbol}): {e}")
-            raise RuntimeError(f"Unable to get price for {symbol}: {e}")
+        except Exception as exc:
+            logger.warning('Market price request failed for %s (%s)', symbol, type(exc).__name__)
+            raise RuntimeError(f'Unable to get price for {symbol}') from None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    async def get_symbol_constraints(self, symbol: str) -> Dict[str, float]:
+        """Return authoritative broker contract metadata when supported.
+
+        Tonpo SDK 1.0.4 has no symbol-specification method or response model.
+        This explicit capability boundary prevents hardcoded broker assumptions.
+        """
+        raise GatewayCapabilityUnavailable(
+            'Tonpo Gateway/SDK does not expose symbol contract constraints'
+        )
 
     async def close(self):
         """Close this connection's underlying client."""
@@ -239,9 +262,9 @@ class GatewayManager:
             else:
                 self._ready_error = "Gateway health check returned unhealthy"
                 logger.error(self._ready_error)
-        except Exception as e:
-            self._ready_error = f"Gateway unreachable: {e}"
-            logger.error(self._ready_error)
+        except Exception as exc:
+            self._ready_error = f"Gateway unreachable ({type(exc).__name__})"
+            logger.error('Gateway health check failed (%s)', type(exc).__name__)
 
     async def stop(self):
         """Close all open clients."""
@@ -294,8 +317,8 @@ class GatewayManager:
                         f"Connection limit reached ({plan.max_connections} for {plan.tier} plan)",
                         {},
                     )
-            except Exception as e:
-                logger.warning(f"Could not check connection limit: {e}")
+            except Exception as exc:
+                logger.warning('Could not check connection limit (%s)', type(exc).__name__)
 
             # Step 1: create a gateway user (no auth required)
             async with TonpoClient.admin(self.gateway_config) as client:
@@ -375,7 +398,11 @@ class GatewayManager:
         if telegram_id not in self.user_clients:
             api_key = self.user_api_keys[telegram_id]
             client = TonpoClient.for_user(self.gateway_config, api_key)
-            await client.__aenter__()
+            try:
+                await client.__aenter__()
+            except Exception as exc:
+                logger.error('Gateway connection failed for user %s (%s)', telegram_id, type(exc).__name__)
+                raise RuntimeError('Gateway connection failed') from None
             self.user_clients[telegram_id] = client
 
         connection = TonpoConnectionAdapter(
@@ -461,6 +488,6 @@ class ExecutionProvider:
             return await self.gateway_manager.register_user(
                 telegram_id, mt5_account, mt5_password, mt5_server
             )
-        except Exception as e:
-            logger.error(f"Registration failed for {telegram_id}: {e}")
-            return False, str(e), {}
+        except Exception as exc:
+            logger.error('Registration failed for %s (%s)', telegram_id, type(exc).__name__)
+            return False, 'Gateway registration failed', {}

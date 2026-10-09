@@ -6,7 +6,8 @@ Provides a clean abstraction over SQLAlchemy sessions
 from typing import Optional, List, Dict, Any, Union
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
-from datetime import datetime, timedelta
+from sqlalchemy.exc import IntegrityError
+from datetime import datetime, timedelta, timezone
 import logging
 from contextlib import contextmanager
 
@@ -30,7 +31,7 @@ class BaseRepository:
             self.session.commit()
         except Exception as e:
             self.session.rollback()
-            logger.error(f"Database commit error: {e}")
+            logger.error("Database commit error (%s)", type(e).__name__)
             raise
 
     def _safe_query(self, query_fn):
@@ -43,7 +44,10 @@ class BaseRepository:
                 self.session.rollback()
                 return query_fn()
             except Exception as retry_err:
-                logger.error(f"Database query failed after rollback: {retry_err}")
+                logger.error(
+                    "Database query failed after rollback (%s)",
+                    type(retry_err).__name__,
+                )
                 raise
 
 
@@ -77,6 +81,18 @@ class UserRepository(BaseRepository):
         if existing:
             raise ValueError(f"User with telegram_id {telegram_id} already exists")
         
+        # New accounts receive one server-side three-day trial unless the caller
+        # explicitly supplies subscription/trial state (imports and tests may do so).
+        if not any(key in kwargs for key in ("trial_used", "trial_start", "trial_end", "subscription_tier", "subscription_expiry")):
+            trial_now = datetime.utcnow()
+            kwargs.update({
+                "subscription_tier": "pro",
+                "trial_used": True,
+                "trial_start": trial_now,
+                "trial_end": trial_now + timedelta(days=3),
+                "subscription_expiry": trial_now + timedelta(days=3),
+            })
+
         # Create user
         user = User(telegram_id=telegram_id, **kwargs)
         self.session.add(user)
@@ -137,7 +153,7 @@ class UserRepository(BaseRepository):
     
     def get_users_needing_connection_check(self, minutes: int = 5) -> List[User]:
         """Get users whose connection hasn't been checked recently"""
-        cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
         return self.session.query(User).filter(
             User.is_active == True,
             User.is_verified == True,
@@ -153,7 +169,7 @@ class UserRepository(BaseRepository):
         if user:
             user.total_trades += 1
             user.daily_trades += 1
-            user.last_trade_date = datetime.utcnow()
+            user.last_trade_date = datetime.now(timezone.utc).replace(tzinfo=None)
             self.session.commit()
     
     def reset_daily_trades(self) -> int:
@@ -198,7 +214,7 @@ class TradeRepository(BaseRepository):
     
     def get_recent_trades(self, hours: int = 24, status: Optional[str] = None) -> List[Trade]:
         """Get recent trades across all users"""
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
         query = self.session.query(Trade).filter(Trade.created_at >= cutoff)
         
         if status:
@@ -208,7 +224,7 @@ class TradeRepository(BaseRepository):
     
     def check_duplicate(self, signal_hash: str, user_id: int, minutes: int = 5) -> bool:
         """Check if similar trade was executed recently"""
-        cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
         existing = self.session.query(Trade).filter(
             Trade.signal_hash == signal_hash,
             Trade.user_id == user_id,
@@ -233,7 +249,7 @@ class TradeRepository(BaseRepository):
     
     def get_user_stats(self, user_id: int, days: int = 30) -> Dict[str, Any]:
         """Get trading statistics for user"""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
         
         trades = self.session.query(Trade).filter(
             Trade.user_id == user_id,
@@ -342,7 +358,7 @@ class NotificationRepository(BaseRepository):
     """Repository for Notification operations"""
     
     def create_notification(self, user_id: int, title: str, message: str, 
-                       type: str = 'info', data: dict = None) -> Optional[Notification]:
+                       type: str = 'info', data: dict = None, event_key: str = None) -> Optional[Notification]:
         """Create a new notification"""
         from .models import User
         user_exists = self.session.query(User).filter(User.id == user_id).first()
@@ -356,20 +372,25 @@ class NotificationRepository(BaseRepository):
         		return None
         	
         try:
-        	notification = Notification(
-        	    user_id=user_id,
-        	    title=title,
-        	    message=message,
-        	    type=type,
-        	    data=data or {}
-        	)
-        	self.session.add(notification)
-        	self._safe_commit()
-        	return notification        	
+            if event_key:
+                existing = self.session.query(Notification).filter_by(user_id=user_id, event_key=event_key).first()
+                if existing:
+                    return existing
+            notification = Notification(
+                user_id=user_id,
+                title=title,
+                message=message,
+                type=type,
+                data=data or {},
+                event_key=event_key,
+            )
+            self.session.add(notification)
+            self._safe_commit()
+            return notification
         except Exception as e:
-        	logger.error(f"Failed to create notification: {e}")
-        	self.session.rollback()
-        	return None
+            logger.error("Failed to create notification (%s)", type(e).__name__)
+            self.session.rollback()
+            return None
     
     def get_unread(self, user_id: int) -> List[Notification]:
         """Get unread notifications for user"""
@@ -403,7 +424,7 @@ class NotificationRepository(BaseRepository):
     
     def delete_old(self, days: int = 30) -> int:
         """Delete notifications older than specified days"""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
         result = self.session.query(Notification).filter(
             Notification.created_at < cutoff
         ).delete()
@@ -432,7 +453,7 @@ class ConnectionLogRepository(BaseRepository):
     
     def get_failed_connections(self, hours: int = 24) -> List[ConnectionLog]:
         """Get failed connections in last X hours"""
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
         return self.session.query(ConnectionLog).filter(
             ConnectionLog.status == 'failed',
             ConnectionLog.created_at >= cutoff
@@ -440,7 +461,7 @@ class ConnectionLogRepository(BaseRepository):
     
     def get_connection_stats(self, user_id: int, days: int = 7) -> Dict[str, Any]:
         """Get connection statistics for user"""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
         
         logs = self.session.query(ConnectionLog).filter(
             ConnectionLog.user_id == user_id,

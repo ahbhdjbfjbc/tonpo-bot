@@ -114,12 +114,36 @@ class RiskService:
         
         return profits
     
+    @staticmethod
+    def validate_broker_constraints(broker_constraints: Dict[str, float]) -> Dict[str, float]:
+        """Validate only authoritative broker metadata; never supply defaults."""
+        required = ('tick_size', 'tick_value', 'volume_step', 'volume_min', 'volume_max')
+        if not isinstance(broker_constraints, dict) or any(
+            key not in broker_constraints for key in required
+        ):
+            raise ValueError('Broker symbol constraints are incomplete')
+        values = {}
+        for key in required:
+            try:
+                value = float(broker_constraints[key])
+            except (TypeError, ValueError) as exc:
+                raise ValueError('Broker symbol constraints are malformed') from exc
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError('Broker symbol constraints are invalid')
+            values[key] = value
+        if values['volume_min'] > values['volume_max']:
+            raise ValueError('Broker volume bounds are invalid')
+        if values['volume_step'] > values['volume_max']:
+            raise ValueError('Broker volume step is invalid')
+        return values
+
     def calculate_trade(self, signal: TradeSignal, balance: float,
                        risk_factor: Optional[float] = None,
                        user_settings: Optional[Dict[str, Any]] = None,
                        broker_constraints: Optional[Dict[str, float]] = None) -> CalculatedTrade:
         """
-        Calculate all trade metrics
+        Calculate all trade metrics. Broker constraints are mandatory for
+        executable sizing and are validated without fabricated defaults.
         """
         if not math.isfinite(float(balance)) or balance <= 0:
             raise ValueError('Account balance must be a finite positive number')
@@ -141,10 +165,17 @@ class RiskService:
             raise ValueError('Risk factor must be a finite positive number')
         
         # Validate risk
-        if risk > self.max_risk_factor:
-            logger.warning(f"Risk {risk} exceeds maximum, capping at {self.max_risk_factor}")
-            risk = self.max_risk_factor
-        elif risk < self.min_risk_factor:
+        configured_max = self.max_risk_factor
+        configured_min = self.min_risk_factor
+        if user_settings:
+            configured_max = float(user_settings.get('max_risk_per_trade', configured_max))
+            configured_min = float(user_settings.get('min_risk_per_trade', configured_min))
+        if not math.isfinite(configured_max) or not math.isfinite(configured_min) or configured_max <= 0 or configured_min <= 0:
+            raise ValueError('Risk limits must be finite and positive')
+        if risk > configured_max:
+            logger.warning(f"Risk {risk} exceeds maximum, capping at {configured_max}")
+            risk = configured_max
+        elif risk < configured_min:
             raise ValueError('Risk factor is below the configured minimum')
         
         # Calculate stop loss in pips
@@ -176,12 +207,13 @@ class RiskService:
         # Calculate risk/reward
         rr_info = self.calculate_risk_reward(signal.entry, signal.stop_loss, signal.take_profits)
         
-        if broker_constraints:
-            tick_size = float(broker_constraints['tick_size'])
-            tick_value = float(broker_constraints['tick_value'])
-            volume_step = float(broker_constraints['volume_step'])
-            volume_min = float(broker_constraints['volume_min'])
-            volume_max = float(broker_constraints['volume_max'])
+        if broker_constraints is not None:
+            broker_constraints = self.validate_broker_constraints(broker_constraints)
+            tick_size = broker_constraints['tick_size']
+            tick_value = broker_constraints['tick_value']
+            volume_step = broker_constraints['volume_step']
+            volume_min = broker_constraints['volume_min']
+            volume_max = broker_constraints['volume_max']
             if user_settings and user_settings.get('max_position_size'):
                 volume_max = min(volume_max, float(user_settings['max_position_size']))
             if (not all(math.isfinite(value) for value in

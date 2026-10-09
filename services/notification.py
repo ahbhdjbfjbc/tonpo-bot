@@ -93,6 +93,26 @@ class NotificationService:
             )
         }
     
+    async def notify_event(self, user_id: int, event: str, *, title: str, message: str, data: Optional[Dict[str, Any]] = None, event_key: Optional[str] = None, notification_type: str = 'info') -> bool:
+        """Persist and optionally deliver one user-owned event idempotently."""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if not user:
+            return False
+        key = event_key or f"{event}:{user.id}:{datetime.utcnow().strftime('%Y-%m-%d')}"
+        notification = self.notification_repo.create_notification(
+            user.id, title, message, type=notification_type, data=data or {}, event_key=key
+        )
+        if not notification:
+            return False
+        if self.bot and not notification.is_delivered:
+            delivered = await self.send_telegram(user.telegram_id, message)
+            if delivered:
+                notification.is_delivered = True
+                notification.delivered_at = datetime.utcnow()
+                self.db.commit()
+            return delivered
+        return True
+
     async def send_telegram(self, user_id: int, message: str, 
                            parse_mode: str = 'Markdown') -> bool:
         """
@@ -110,7 +130,7 @@ class NotificationService:
             )
             return True
         except Exception as e:
-            logger.error(f"Failed to send Telegram to {user_id}: {e}")
+            logger.error("Failed to send Telegram message to %s (%s)", user_id, type(e).__name__)
             return False
     
     async def notify_trade_executed(self, user_id: int, trade_data: Dict[str, Any]):

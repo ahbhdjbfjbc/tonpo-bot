@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tonpo — Trading Platform</title>
+  <title>Tonpo — Automated Trading Protection &amp; Execution</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
@@ -29,7 +29,7 @@
 </head>
 <body class="bg-surface-900 text-slate-200 font-sans antialiased min-h-screen">
   <!-- Login Overlay -->
-  <div id="login-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-surface-900">
+  <div id="login-screen" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-surface-900">
     <div class="w-full max-w-md mx-4">
       <div class="text-center mb-8">
         <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-accent/20 border border-accent/30 mb-4">
@@ -39,6 +39,7 @@
         <p class="text-slate-400 mt-1 text-sm">منصة التداول الاحترافية</p>
       </div>
       <div class="bg-surface-800 border border-surface-600 rounded-2xl p-6 shadow-2xl">
+        <div id="telegram-webapp-status" class="hidden text-sm bg-accent/10 border border-accent/20 rounded-lg px-3 py-2 mb-4"></div>
         <form id="login-form" class="space-y-4">
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Telegram ID</label>
@@ -64,7 +65,7 @@
   </div>
 
   <!-- App Shell -->
-  <div id="app" class="hidden min-h-screen flex">
+  <div id="app" class="min-h-screen flex">
     <!-- Sidebar -->
     <aside id="sidebar" class="fixed inset-y-0 right-0 z-40 w-64 bg-surface-800 border-l border-surface-600 transform translate-x-full md:translate-x-0 transition-transform duration-200 flex flex-col">
       <div class="p-5 border-b border-surface-600">
@@ -74,7 +75,7 @@
           </div>
           <div>
             <div class="font-semibold text-white text-sm">Tonpo</div>
-            <div class="text-[10px] text-slate-500 uppercase tracking-wider">Trading Platform</div>
+            <div class="text-[10px] text-slate-500 uppercase tracking-wider">منصة Tonpo</div>
           </div>
         </div>
       </div>
@@ -91,6 +92,12 @@
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
           الصفقات
         </a>
+        <a href="#analytics" data-page="analytics" class="nav-item"><span class="nav-icon">◫</span> التحليلات الذكية</a>
+        <a href="#protection" data-page="protection" class="nav-item"><span class="nav-icon">✦</span> مركز الحماية</a>
+        <a href="#results" data-page="results" class="nav-item">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 19V5m0 14h16M8 16v-3m4 3V8m4 8V5"/></svg>
+          مركز النتائج
+        </a>
         <a href="#mt5" data-page="mt5" class="nav-item">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
           MT5
@@ -103,6 +110,11 @@
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
           الدعم
         </a>
+        <a href="#news" data-page="news" class="nav-item"><span class="nav-icon">◈</span> حماية الأخبار</a>
+        <a href="#subscription" data-page="subscription" class="nav-item"><span class="nav-icon">◇</span> الاشتراك والتجربة</a>
+        <a href="#account" data-page="account" class="nav-item"><span class="nav-icon">◌</span> الحساب / MT5</a>
+        <a href="#tradingview" data-page="tradingview" class="nav-item"><span class="nav-icon">⌁</span> TradingView</a>
+        <a href="#trading_mode" data-page="trading_mode" class="nav-item"><span class="nav-icon">◉</span> وضع التداول</a>
         <a href="#settings" data-page="settings" class="nav-item">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
           الإعدادات
@@ -139,7 +151,7 @@
           <div class="flex items-center gap-3">
             <div id="dry-run-badge" class="hidden items-center gap-1.5 px-2.5 py-1 rounded-full bg-warn/15 border border-warn/30 text-warn text-[11px] font-medium">
               <span class="w-1.5 h-1.5 rounded-full bg-warn animate-pulse"></span>
-              DRY RUN
+              تشغيل تجريبي
             </div>
             <div id="conn-badge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-700 border border-surface-600 text-[11px] text-slate-400">
               <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
@@ -151,12 +163,23 @@
 
       <!-- Content -->
       <main id="content" class="flex-1 p-4 md:p-6 overflow-y-auto">
-        <!-- Pages injected by JS -->
+        <div class="hero-card mb-5">
+          <div><div class="eyebrow">TONPO · GUEST MODE</div>
+            <h1 class="text-2xl md:text-3xl font-bold text-white mt-2">استكشف Tonpo قبل التسجيل</h1>
+            <p class="text-slate-300 mt-2 max-w-2xl">تعرّف على الإشارات والحماية وإدارة المخاطر وربط MT5. لا تحتاج API Key لفتح Mini App.</p>
+          </div><span class="badge badge-blue mt-3 md:mt-0">استكشاف عام</span>
+        </div>
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div class="card"><div class="card-title">كيف تعمل Tonpo؟</div><p class="card-sub mt-2">تحقق من الإشارات والاشتراك والمخاطر وحماية الأخبار قبل مسار التنفيذ.</p></div>
+          <div class="card"><div class="card-title">الحماية وإدارة المخاطر</div><p class="card-sub mt-2">الضوابط تُفرض من Backend ولا يمكن تجاوزها من الواجهة.</p></div>
+          <div class="card"><div class="card-title">التسجيل وربط MT5</div><p class="card-sub mt-2">استخدم مسار التسجيل الموجود في بوت Telegram عبر <span class="mono">/register</span> عند اختيار ميزة حساب.</p></div>
+        </div>
       </main>
     </div>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/static/js/app.js?v=guest-mode-1"></script>
 
   <!-- Tonpo AI Assistant -->
   <button id="ai-fab" type="button" title="AI Assistant"
