@@ -257,21 +257,13 @@ class TradingHandler:
             formatted = format_trade_calculation(result, show_confirmation=False)
             await self._edit_message(
                 update, context,
-                formatted,
+                f"{formatted}\nاستخدم /trade إذا أردت بدء مسار تنفيذ منفصل.",
                 parse_mode=ParseMode.HTML
             )
-            
-            # Ask if they want to execute
-            from bot.keyboards import get_execution_keyboard
-            
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="هل ترغب في تنفيذ هذه الصفقة؟",
-                reply_markup=get_execution_keyboard()
-            )
-            
-            context.user_data['calculation'] = result
-            return CONFIRM_TRADE
+
+            # A calculation is a terminal preview, never a trade confirmation.
+            # Execution must be started explicitly through /trade.
+            return ConversationHandler.END
             
         except Exception as exc:
             logger.error("Trade calculation failed (%s)", type(exc).__name__)
@@ -313,6 +305,14 @@ class TradingHandler:
     async def _execute_trade(self, update: Update, context: CallbackContext) -> int:
         """Execute the confirmed trade"""
         user_id = update.effective_user.id
+
+        if context.user_data.get('action') != 'trade':
+            await self._edit_message(
+                update, context,
+                "❌ هذه معاينة فقط. ابدأ مسار التنفيذ باستخدام /trade."
+            )
+            return ConversationHandler.END
+
         calculation = context.user_data.get('calculation')
         
         if not calculation:
