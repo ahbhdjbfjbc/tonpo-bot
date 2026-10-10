@@ -118,6 +118,7 @@ class TradeExecutor:
         trade_record = None
         results = []
         reserved_at = None
+        broker_mutation_started = False
         try:
             # Step 1: Parse signal
             logger.info(f"Parsing signal for user {user_id}")
@@ -314,9 +315,11 @@ class TradeExecutor:
                     trade_data['take_profit'] = tp
                     
                     if signal.order_type.value in ['Buy', 'Sell']:
+                        broker_mutation_started = True
                         result = await self._execute_market_order(connection, trade_data)
                     else:
                         trade_data['price'] = signal.entry
+                        broker_mutation_started = True
                         result = await self._execute_pending_order(connection, trade_data)
                     
                     results.append(result)
@@ -328,9 +331,11 @@ class TradeExecutor:
             else:
                 # Single TP execution
                 if signal.order_type.value in ['Buy', 'Sell']:
+                    broker_mutation_started = True
                     result = await self._execute_market_order(connection, trade_data)
                 else:
                     trade_data['price'] = signal.entry
+                    broker_mutation_started = True
                     result = await self._execute_pending_order(connection, trade_data)
                 
                 results = [result]
@@ -366,10 +371,9 @@ class TradeExecutor:
             trade_record.status = execution_status
             trade_record.executed_at = datetime.utcnow() if execution_status == 'executed' else None
 
-            # Daily slots are reserved atomically before intent creation. Only
-            # accepted pending orders or verified executions enter success totals;
-            # unknown/partial outcomes keep their reservation for reconciliation.
-            if execution_status in {'executed', 'pending'}:
+            # A pending order consumes the submission slot but is not counted as
+            # a completed trade. Unknown/partial outcomes keep the slot for reconciliation.
+            if execution_status == 'executed':
                 self.sub_service.record_trade_statistics(user_id, calculated.position_size)
             elif execution_status == 'failed' and reserved_at is not None:
                 self.sub_service.release_trade_slot(user_id, reserved_at)
@@ -427,6 +431,31 @@ class TradeExecutor:
             
         except Exception as exc:
             self.db.rollback()
+            if not broker_mutation_started:
+                # No order request was ever sent, so it is safe to release the
+                # reservation and mark any durable intent as failed, not unknown.
+                try:
+                    if reserved_at is not None:
+                        self.sub_service.release_trade_slot(user_id, reserved_at)
+                        self.db.commit()
+                    if trade_record is not None and getattr(trade_record, 'id', None) is not None:
+                        persisted = self.db.query(Trade).filter_by(id=trade_record.id).one()
+                        persisted.status = 'failed'
+                        persisted.error_message = 'Execution failed before broker submission.'
+                        self.db.commit()
+                except Exception:
+                    self.db.rollback()
+                try:
+                    await self.notification.notify_trade_failed(
+                        user_id, 'Trade was not submitted to the broker', {'signal': signal_text[:100]}
+                    )
+                except Exception:
+                    logger.error("Could not notify user %s about pre-submission failure", user_id)
+                return {
+                    'success': False,
+                    'error': 'Trade could not be submitted; no broker order was sent.',
+                    'status': 'failed',
+                }
             if trade_record is not None and getattr(trade_record, 'id', None) is not None:
                 try:
                     persisted = self.db.query(Trade).filter_by(id=trade_record.id).one()

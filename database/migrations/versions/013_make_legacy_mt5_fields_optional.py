@@ -19,5 +19,8 @@ def upgrade():
 
 
 def downgrade():
-    # These fields are no longer required by gateway-backed accounts; do not invent values.
-    pass
+    # Requiring these values again may fail on gateway-backed accounts and cannot
+    # safely invent credentials or server identifiers for existing rows.
+    raise RuntimeError(
+        "Revision 013 cannot be safely reversed: legacy MT5 fields may be NULL. Use a forward-fix or restore a tested backup."
+    )

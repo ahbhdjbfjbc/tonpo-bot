@@ -11,7 +11,7 @@ from config.settings import settings
 from database.database import Base
 from database.models import AdminAuditLog, PaymentRequest, SubscriptionPlan
 from database.repositories import UserRepository
-from services.payment import PaymentService
+from services.payment import PaymentManager, PaymentMethod, PaymentService
 
 
 def _db():
@@ -181,3 +181,20 @@ def test_automatic_webhook_path_is_disabled(monkeypatch):
             PaymentService(db).process_verified_event(b"{}", "anything")
     finally:
         db.close(); engine.dispose()
+
+
+def test_legacy_billing_auto_activation_path_is_disabled():
+    import asyncio
+
+    class BillingMustNotBeCalled:
+        async def create_crypto_payment(self, *_args, **_kwargs):
+            raise AssertionError("legacy billing must not create a checkout")
+
+        async def get_payment_status(self, *_args, **_kwargs):
+            raise AssertionError("legacy billing must not be polled")
+
+    manager = PaymentManager(BillingMustNotBeCalled(), db_session=None)
+    with pytest.raises(RuntimeError, match="Automatic Billing payments are disabled"):
+        asyncio.run(manager.initiate_upgrade("460199", "pro", PaymentMethod.USDT_ERC20))
+    with pytest.raises(RuntimeError, match="monitoring is disabled"):
+        asyncio.run(manager.monitor_payment("payment-1", "460199", lambda **_kwargs: None))

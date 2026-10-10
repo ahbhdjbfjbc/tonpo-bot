@@ -229,7 +229,7 @@ TP3 2350.00
 | Priority support | — | — | ✅ | ✅ |
 | Price | Free | $9.99/mo | $29.99/mo | $99.99/mo |
 
-Payment requests support configured **USDT** and **BTC** wallets. Users submit a transaction proof for **manual administrator review**; a submitted hash or signed provider webhook never activates a subscription. Do not promise automatic on-chain verification: that integration is disabled.
+Payment requests support configured **USDT** and **BTC** wallets. A user submits the transaction hash and exact payment details; this changes the request to `submitted` only and does not activate access. An administrator in `ADMIN_USER_IDS` reviews the queue at `GET /api/admin/payment-requests?status=submitted`, verifies the transaction on the correct network, then uses `POST /api/admin/payment-requests/{payment_id}/approve` or `/reject` with a reason. Approval is audited; a submitted hash or provider webhook never activates a subscription. Do not promise automatic on-chain verification: that integration is disabled. See [the operations runbook](docs/OPERATIONS_RUNBOOK.md#مراجعة-الدفع-اليدوية) for the safe review procedure.
 
 ---
 
@@ -322,9 +322,11 @@ make migrate
 # Create new migration after changing models
 make create-migration message="add subscription table"
 
-# Roll back one migration
-alembic downgrade -1
+# Check the applied migration head
+alembic current
 ```
+
+Do not use `alembic downgrade -1` as a generic rollback: some migrations are intentionally irreversible. For production changes, prefer a reviewed forward-fix or a blue/green restore plan tested against an isolated backup first; see [the operations runbook](docs/OPERATIONS_RUNBOOK.md).
 
 ---
 

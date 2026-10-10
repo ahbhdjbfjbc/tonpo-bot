@@ -218,8 +218,11 @@ class PaymentManager:
             method: Payment method (USDT or BTC)
         
         Returns:
-            Payment details to show to user (address, amount, expires_at)
+            Payment details to show to the user (address, amount, expires_at)
         """
+        raise RuntimeError(
+            "Automatic Billing payments are disabled; use the manual payment request and administrator approval workflow"
+        )
         logger.info(f"Initiating upgrade: user={user_id} → {plan_id}")
         
         # Call Billing to create payment
@@ -266,6 +269,9 @@ class PaymentManager:
         Returns:
             True if payment activated, False if expired/failed
         """
+        raise RuntimeError(
+            "Automatic Billing payment monitoring is disabled; subscription activation requires administrator approval"
+        )
         logger.info(f"Monitoring payment {payment_id} for user {user_id}")
         
         max_polls = 120  # 2 hours (120 * 60 sec = 2 hours, polling every 60 sec)

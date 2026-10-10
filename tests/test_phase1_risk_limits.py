@@ -246,3 +246,99 @@ def test_definitive_broker_rejection_releases_reserved_daily_slot(monkeypatch):
         assert user.total_trades == 0
     finally:
         db.close(); engine.dispose()
+
+
+def test_accepted_pending_order_consumes_slot_but_not_completed_trade_totals(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_DRY_RUN", False, raising=False)
+    engine, db = _db()
+    try:
+        user = _setup(db)
+
+        class PendingConnection(DemoConnection):
+            async def create_limit_buy_order(self, *args, **kwargs):
+                self.order_calls += 1
+                return {"success": True, "status": "accepted", "orderId": "demo-pending"}
+
+            async def create_limit_sell_order(self, *args, **kwargs):
+                raise AssertionError("unexpected pending sell order")
+
+            async def create_stop_buy_order(self, *args, **kwargs):
+                raise AssertionError("unexpected pending stop order")
+
+            async def create_stop_sell_order(self, *args, **kwargs):
+                raise AssertionError("unexpected pending stop order")
+
+        connection = PendingConnection(balance=10000.0, equity=10000.0, positions=[])
+        pending_signal = UnifiedSignal(
+            source="manual", user_id=910001, external_id="accepted-pending",
+            payload=(
+                '{"order_type":"Buy Limit","symbol":"EURUSD","entry":1.09,'
+                '"stop_loss":1.08,"take_profits":[1.12],"id":"accepted-pending"}'
+            ),
+        )
+        executor = TradeExecutor(db, execution_provider=DemoProvider(connection))
+        pipeline = SignalPipeline(db, executor)
+        pipeline.news.assess = lambda symbol: {"status": "inactive", "reason": "no event", "events": []}
+
+        result = asyncio.run(pipeline.process(pending_signal, confirmed=True))
+        db.refresh(user)
+
+        assert result["status"] == "pending"
+        assert connection.order_calls == 1
+        assert user.daily_trades == 1
+        assert user.total_trades == 0
+        assert user.total_volume == 0
+    finally:
+        db.close(); engine.dispose()
+
+
+def test_ambiguous_broker_result_keeps_slot_but_not_completed_trade_totals(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_DRY_RUN", False, raising=False)
+    engine, db = _db()
+    try:
+        user = _setup(db)
+
+        class UnknownConnection(DemoConnection):
+            async def create_market_buy_order(self, *args, **kwargs):
+                self.order_calls += 1
+                return {"success": False, "status": "unknown"}
+
+        connection = UnknownConnection(balance=10000.0, equity=10000.0, positions=[])
+        result = _run(db, connection, "ambiguous-broker-result")
+        db.refresh(user)
+
+        assert result["status"] == "unknown"
+        assert connection.order_calls == 1
+        assert user.daily_trades == 1
+        assert user.total_trades == 0
+        assert user.total_volume == 0
+    finally:
+        db.close(); engine.dispose()
+
+
+def test_intent_persistence_failure_releases_slot_before_broker_call(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_DRY_RUN", False, raising=False)
+    engine, db = _db()
+    try:
+        user = _setup(db)
+        connection = DemoConnection(balance=10000.0, equity=10000.0, positions=[])
+        executor = TradeExecutor(db, execution_provider=DemoProvider(connection))
+        pipeline = SignalPipeline(db, executor)
+        pipeline.news.assess = lambda symbol: {"status": "inactive", "reason": "no event", "events": []}
+        original_add = db.add
+
+        def fail_trade_intent(instance, *args, **kwargs):
+            if isinstance(instance, Trade) and instance.status == "pending":
+                raise RuntimeError("simulated intent persistence failure")
+            return original_add(instance, *args, **kwargs)
+
+        db.add = fail_trade_intent
+        result = asyncio.run(pipeline.process(_signal("intent-write-failure"), confirmed=True))
+        db.refresh(user)
+
+        assert result["status"] == "failed"
+        assert connection.order_calls == 0
+        assert user.daily_trades == 0
+        assert user.total_trades == 0
+    finally:
+        db.close(); engine.dispose()
