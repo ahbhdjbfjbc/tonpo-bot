@@ -134,7 +134,14 @@ class ProtectionService:
                 if pnl <= -abs(float(max_daily_loss)): return self._blocked("daily_loss", "Daily loss limit reached")
             max_losses = getattr(account_settings, "max_consecutive_losses", None)
             if max_losses is not None:
-                rows = self.db.query(Trade).filter(Trade.user_id == user.id, Trade.closed_at.isnot(None), Trade.profit_loss.isnot(None)).order_by(Trade.closed_at.desc()).limit(int(max_losses) + 1).all()
+                max_losses = int(max_losses)
+                if max_losses <= 0:
+                    raise ValueError("invalid consecutive loss limit")
+                rows = self.db.query(Trade).filter(
+                    Trade.user_id == user.id,
+                    Trade.closed_at.isnot(None),
+                    Trade.profit_loss.isnot(None),
+                ).order_by(Trade.closed_at.desc()).limit(max_losses + 1).all()
                 consecutive = 0
                 for trade in rows:
                     if float(trade.profit_loss) < 0: consecutive += 1

@@ -138,6 +138,9 @@ class NotificationService:
     
     async def notify_trade_executed(self, user_id: int, trade_data: Dict[str, Any]):
         """Notify user about successful trade execution"""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if user and user.settings and not getattr(user.settings, "notify_on_trade", True):
+            return
         template = self.templates['trade_executed']
         message = template.format(
             order_type=trade_data['order_type'],
@@ -284,6 +287,9 @@ class NotificationService:
 
     async def notify_trade_failed(self, user_id: int, error: str, trade_data: Dict[str, Any]):
         """Notify user about trade failure"""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if user and user.settings and not getattr(user.settings, "notify_on_error", True):
+            return
         template = self.templates['trade_failed']
         message = template.format(
             symbol=trade_data.get('symbol', 'Unknown'),

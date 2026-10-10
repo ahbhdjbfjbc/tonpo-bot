@@ -19,6 +19,12 @@
 - إضافة outbox retry/reclaimer لقناة النتائج: الصفوف الفاشلة أو العالقة يمكن أن يعيدها bot worker دون إعادة تنفيذ الصفقة.
 - فرض حد `max_connections` عند ربط محركات MT5، و`api_access` عند تسجيل الدخول بمفتاح API.
 - إصلاح downgrade ليحفظ حالة الخطة والميزات في transaction واحدة، وتمديد الاشتراك من نهاية الصلاحية الحالية بدل فقدان الأيام.
+- إصلاح مسار callback لإغلاق الصفقات باستخدام provider المحقون بدل إنشاء executor بلا provider.
+- تقوية consecutive-loss protection بعزل `user_id` والتحقق من قيم الحدود غير الصالحة.
+- تنفيذ إعادة حساب معاينة المخاطرة في `adjust_risk` دون حفظ تفضيل مؤقت بالخطأ.
+- تطبيق تفضيلات `notify_on_trade` و`notify_on_error` قبل الإرسال.
+- فرض `max_symbols` وتحقق صيغة الرموز في تحديثات إعدادات الويب.
+- إضافة security headers أساسية للواجهة، مع HSTS عند HTTPS.
 - إضافة `/api/live` و`/api/ready`؛ readiness يفحص DB وAlembic schema وRedis.
 - إضافة خدمة `tonpo-migrate` إلى Compose وجعل bot/web يعتمدان على نجاح `alembic upgrade head`.
 - ربط منافذ PostgreSQL وRedis على `127.0.0.1` بدل النشر العام.
@@ -49,5 +55,6 @@
 - إضافة reconciliation لنتائج `UNKNOWN` وعمليات timeout.
 - إكمال فرض entitlements للاشتراك.
 - إكمال enforcement المتبقي لـ`max_symbols` بعد تحديد كيان الاشتراك بالرموز في المنتج.
+- إضافة login throttling عبر طبقة HTTP لا تكسر استدعاءات الاختبارات المباشرة، ثم إضافة revocation/refresh rotation.
 - تقوية مصادقة الويب وتخزين الرموز.
 - إضافة E2E حقيقي مع MetaDocker/MT5/Telegram/TradingView.

@@ -201,7 +201,11 @@ class CallbackHandlers:
             position_id = args[1]
             
             from services.trade_executor import TradeExecutor
-            executor = TradeExecutor(self.db, self.bot)
+            executor = TradeExecutor(
+                self.db,
+                self.bot,
+                execution_provider=self.execution_provider,
+            )
             
             result = await executor.close_trade(update.effective_user.id, position_id)
             
