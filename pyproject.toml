@@ -76,6 +76,7 @@ testpaths = [
 markers = [
     "asyncio: mark test as async",
 ]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["fx_signal_copier"]
