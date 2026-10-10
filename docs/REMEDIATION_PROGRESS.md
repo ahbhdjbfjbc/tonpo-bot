@@ -25,6 +25,8 @@
 - تطبيق تفضيلات `notify_on_trade` و`notify_on_error` قبل الإرسال.
 - فرض `max_symbols` وتحقق صيغة الرموز في تحديثات إعدادات الويب.
 - إضافة security headers أساسية للواجهة، مع HSTS عند HTTPS.
+- إضافة login throttling على طبقة HTTP عند توفر Redis، دون كسر استدعاءات auth المباشرة في الاختبارات.
+- تهريب قيم status/symbol/source/reason/order في أجزاء مركز الإشارات والصفقات والنتائج، مع إصلاح `statusBadge`.
 - إضافة `/api/live` و`/api/ready`؛ readiness يفحص DB وAlembic schema وRedis.
 - إضافة خدمة `tonpo-migrate` إلى Compose وجعل bot/web يعتمدان على نجاح `alembic upgrade head`.
 - ربط منافذ PostgreSQL وRedis على `127.0.0.1` بدل النشر العام.
@@ -55,6 +57,6 @@
 - إضافة reconciliation لنتائج `UNKNOWN` وعمليات timeout.
 - إكمال فرض entitlements للاشتراك.
 - إكمال enforcement المتبقي لـ`max_symbols` بعد تحديد كيان الاشتراك بالرموز في المنتج.
-- إضافة login throttling عبر طبقة HTTP لا تكسر استدعاءات الاختبارات المباشرة، ثم إضافة revocation/refresh rotation.
+- إضافة revocation/refresh rotation ونقل access token من localStorage/query string إلى تصميم متصفح أكثر أمانًا.
 - تقوية مصادقة الويب وتخزين الرموز.
 - إضافة E2E حقيقي مع MetaDocker/MT5/Telegram/TradingView.

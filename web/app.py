@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 import redis
+from services.cache import CacheService, RateLimitUnavailable
 
 from web.cors import LOCAL_DEVELOPMENT_ORIGINS, resolve_cors_origins
 
@@ -27,6 +28,7 @@ from database.database import db_manager
 from web.runtime import initialize_web_execution_provider, shutdown_web_execution_provider
 
 logger = logging.getLogger(__name__)
+_login_rate_limiter = None
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -74,6 +76,30 @@ async def safe_request_diagnostics(request: Request, call_next):
             init_data = payload.get("init_data") if isinstance(payload, dict) else None
             init_data_present = isinstance(init_data, str) and bool(init_data)
             init_data_length = len(init_data) if isinstance(init_data, str) else 0
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+    if request.url.path == "/api/auth/login" and body and getattr(settings, "REDIS_URL", None):
+        try:
+            payload = json.loads(body)
+            telegram_id = payload.get("telegram_id") if isinstance(payload, dict) else None
+            if telegram_id is not None:
+                global _login_rate_limiter
+                if _login_rate_limiter is None:
+                    _login_rate_limiter = CacheService()
+                allowed, retry_after = _login_rate_limiter.check_rate_limit(
+                    f"ratelimit:web-login:{request.client.host if request.client else 'unknown'}:{telegram_id}",
+                    10,
+                    60,
+                )
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "Too many login attempts"},
+                        headers={"Retry-After": str(max(1, retry_after))},
+                    )
+        except RateLimitUnavailable:
+            return JSONResponse(status_code=503, content={"detail": "Login temporarily unavailable"})
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
