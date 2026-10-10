@@ -114,10 +114,14 @@ class ProtectionService:
                 if abs(float(ask) - float(bid)) > float(max_spread): return self._blocked("spread", "Spread exceeds the configured maximum")
             max_slippage = getattr(account_settings, "max_slippage", None)
             observed_slippage = metadata.get("slippage", metadata.get("observed_slippage"))
-            if max_slippage is not None and observed_slippage is not None and float(observed_slippage) > float(max_slippage): return self._blocked("slippage", "Slippage exceeds the configured maximum")
+            if max_slippage is not None:
+                if observed_slippage is None: return self._blocked("slippage_unavailable", "Slippage data unavailable; protection is fail-closed")
+                if float(observed_slippage) > float(max_slippage): return self._blocked("slippage", "Slippage exceeds the configured maximum")
             max_volatility = getattr(account_settings, "max_volatility", None)
             observed_volatility = metadata.get("volatility", metadata.get("observed_volatility"))
-            if max_volatility is not None and observed_volatility is not None and float(observed_volatility) > float(max_volatility): return self._blocked("volatility", "Volatility exceeds the configured maximum")
+            if max_volatility is not None:
+                if observed_volatility is None: return self._blocked("volatility_unavailable", "Volatility data unavailable; protection is fail-closed")
+                if float(observed_volatility) > float(max_volatility): return self._blocked("volatility", "Volatility exceeds the configured maximum")
             start, end = getattr(account_settings, "session_start_utc", None), getattr(account_settings, "session_end_utc", None)
             if start and end:
                 current = now.astimezone(timezone.utc).strftime("%H:%M")

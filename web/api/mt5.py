@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
 from datetime import datetime
 from typing import Any, List
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -12,11 +14,41 @@ from config.settings import settings
 from database.models import ConnectionLog, EngineInstance, User
 from database.repositories import EngineInstanceRepository
 from services.auth import encrypt_gateway_api_key
+from gateway_client.metadocker import MetaDockerConnectionAdapter, MetaDockerError
 from web.deps import get_current_user, get_db
 from web.schemas import EngineInstanceIn, EngineInstanceOut, MT5StatusOut
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mt5", tags=["mt5"])
+
+
+def _validate_engine_endpoint(endpoint: str) -> None:
+    """Allow only explicitly trusted or private MetaDocker destinations."""
+    parsed = urlsplit(endpoint)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    allowed = {
+        item.strip().lower().rstrip(".")
+        for item in str(getattr(settings, "METADOCKER_ALLOWED_HOSTS", "")).split(",")
+        if item.strip()
+    }
+    if not host:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Engine endpoint host is required")
+    if bool(getattr(settings, "METADOCKER_REQUIRE_HTTPS", True)) and parsed.scheme != "https":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Engine endpoint must use HTTPS")
+    if host in allowed:
+        return
+    try:
+        address = ipaddress.ip_address(host)
+        is_trusted_private = address.is_private or address.is_loopback or address.is_link_local
+    except ValueError:
+        # Container/service names without a public DNS suffix are internal
+        # Compose/Kubernetes names; public names require explicit allowlisting.
+        is_trusted_private = "." not in host or host.endswith((".internal", ".local"))
+    if not is_trusted_private:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Engine endpoint host is not trusted; configure METADOCKER_ALLOWED_HOSTS",
+        )
 
 
 def _engine_out(row: EngineInstance) -> EngineInstanceOut:
@@ -42,12 +74,30 @@ def list_engines(user: User = Depends(get_current_user), db: Session = Depends(g
 
 
 @router.put("/engine", response_model=EngineInstanceOut)
-def bind_engine(
+async def bind_engine(
     payload: EngineInstanceIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Bind one MetaDocker instance to this user/account, encrypted at rest."""
+    _validate_engine_endpoint(payload.endpoint)
+    connection = MetaDockerConnectionAdapter(
+        payload.endpoint,
+        payload.api_key,
+        user.id,
+        payload.engine_instance_id,
+        timeout=float(getattr(settings, "METADOCKER_REQUEST_TIMEOUT", 15.0)),
+        max_tick_age_seconds=float(getattr(settings, "METADOCKER_MAX_TICK_AGE_SECONDS", 10.0)),
+    )
+    try:
+        await connection.health()
+    except (MetaDockerError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="MetaDocker health check failed; engine was not bound",
+        ) from exc
+    finally:
+        await connection.close()
     try:
         row = EngineInstanceRepository(db).upsert_for_user(
             user.id,
@@ -63,7 +113,7 @@ def bind_engine(
 
 
 @router.delete("/engine/{engine_instance_id}")
-def disable_engine(
+async def disable_engine(
     engine_instance_id: str,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -71,6 +121,13 @@ def disable_engine(
     """Disable routing to an engine without deleting its audit record."""
     if not EngineInstanceRepository(db).disable_for_user(user.id, engine_instance_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engine not found")
+    try:
+        from web.runtime import get_execution_provider
+        provider = get_execution_provider()
+        if provider is not None and hasattr(provider, "invalidate_engine"):
+            await provider.invalidate_engine(engine_instance_id)
+    except Exception as exc:
+        logger.warning("Engine cache invalidation failed (%s)", type(exc).__name__)
     return {"disabled": True, "engine_instance_id": engine_instance_id}
 
 

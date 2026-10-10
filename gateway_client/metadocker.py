@@ -296,6 +296,7 @@ class MetaDockerExecutionProvider:
         self.session_factory = session_factory
         self.timeout = timeout
         self.connections: Dict[str, MetaDockerConnectionAdapter] = {}
+        self._connection_fingerprints: Dict[str, tuple[str, str]] = {}
 
     async def get_connection(self, telegram_id: int) -> MetaDockerConnectionAdapter:
         from database.repositories import EngineInstanceRepository
@@ -307,8 +308,13 @@ class MetaDockerExecutionProvider:
                 raise MetaDockerError("No active MetaDocker engine for user")
             key = decrypt_gateway_api_key(row.api_key_ciphertext)
             cached = self.connections.get(row.engine_instance_id)
-            if cached is not None:
+            fingerprint = (row.endpoint, row.api_key_ciphertext)
+            if cached is not None and self._connection_fingerprints.get(row.engine_instance_id) == fingerprint:
                 return cached
+            if cached is not None:
+                await cached.close()
+                self.connections.pop(row.engine_instance_id, None)
+                self._connection_fingerprints.pop(row.engine_instance_id, None)
             connection = MetaDockerConnectionAdapter(
                 row.endpoint,
                 key,
@@ -317,11 +323,19 @@ class MetaDockerExecutionProvider:
                 timeout=self.timeout,
             )
             self.connections[row.engine_instance_id] = connection
+            self._connection_fingerprints[row.engine_instance_id] = fingerprint
             return connection
         finally:
             db.close()
+
+    async def invalidate_engine(self, engine_instance_id: str) -> None:
+        connection = self.connections.pop(engine_instance_id, None)
+        self._connection_fingerprints.pop(engine_instance_id, None)
+        if connection is not None:
+            await connection.close()
 
     async def shutdown(self) -> None:
         for connection in list(self.connections.values()):
             await connection.close()
         self.connections.clear()
+        self._connection_fingerprints.clear()

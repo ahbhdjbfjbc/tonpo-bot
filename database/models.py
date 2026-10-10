@@ -247,7 +247,7 @@ class Trade(Base):
     # Execution details
     mt_order_ids = Column(JSON, default=list)  # Array of MetaTrader order IDs
     execution_results = Column(JSON, default=list, server_default='[]', nullable=False)
-    STATUSES = ['pending', 'executed', 'partial', 'unknown', 'failed', 'cancelled']
+    STATUSES = ['pending', 'executed', 'partial', 'unknown', 'failed', 'cancelled', 'closed']
     status = Column(String(20), default='pending', nullable=False, index=True)
     error_message = Column(Text, nullable=True)
     

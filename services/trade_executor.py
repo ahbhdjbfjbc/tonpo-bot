@@ -91,6 +91,16 @@ class TradeExecutor:
                 'error': 'Trade result persistence is unavailable; database upgrade is required.',
                 'status': 'blocked_schema',
             }
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if not user:
+            return {'success': False, 'error': 'User not found', 'status': 'user_not_found'}
+        if (user.trading_mode or 'demo') != 'live':
+            logger.warning("Trade execution blocked: user %s is not in live mode", user_id)
+            return {
+                'success': False,
+                'error': 'Live execution requires the account trading mode to be live',
+                'status': 'account_mode_blocked',
+            }
         # Check if user already has a trade in progress
         if user_id in self.pending_trades:
             return {
@@ -122,12 +132,7 @@ class TradeExecutor:
                     'status': 'limit_reached'
                 }
             
-            # Step 3: Get user and account info
-            user = self.user_repo.get_by_telegram_id(user_id)
-            if not user:
-                raise TradeExecutionError("User not found")
-            
-            # Step 4: Get connection via ExecutionProvider
+            # Step 3: Get connection via ExecutionProvider
             connection = await self._get_connection(user_id)
             account_info = await connection.get_account_information()
             get_positions = getattr(connection, 'get_positions', None)
@@ -582,7 +587,8 @@ class TradeExecutor:
             if success:
                 # Update trade record
                 trade = self.db.query(Trade).filter(
-                    Trade.mt_order_ids.contains([position_id])
+                    Trade.user_id == user_id,
+                    Trade.mt_order_ids.contains([position_id]),
                 ).first()
                 
                 if trade:

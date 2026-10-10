@@ -307,6 +307,10 @@ class Bot:
         # Inject into handlers regardless of gateway success/failure
         self.registration.execution_provider = self.execution_provider
         self.trading.execution_provider = self.execution_provider
+        # TradingHandler owns the executor used by /trade and channel signals.
+        # Keep both references synchronized; setting only the handler-level
+        # provider leaves the actual execution boundary unconfigured.
+        self.trading.trade_executor.execution_provider = self.execution_provider
         self.trading.mt5_manager_ready.set()
         self.settings_handler.execution_provider = self.execution_provider
 

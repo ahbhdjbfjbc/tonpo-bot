@@ -16,6 +16,11 @@ _executor: Optional[TradeExecutor] = None
 _execution_provider: Any = None
 
 
+def get_execution_provider() -> Any:
+    """Return the provider owned by this web process, if initialized."""
+    return _execution_provider
+
+
 def set_runtime(
     pipeline: Optional[SignalPipeline] = None,
     executor: Optional[TradeExecutor] = None,

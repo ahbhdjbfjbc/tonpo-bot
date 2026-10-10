@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     ENGINE_PROVIDER: str = Field('tonpo', validation_alias='ENGINE_PROVIDER')
     METADOCKER_REQUEST_TIMEOUT: float = Field(15.0, validation_alias='METADOCKER_REQUEST_TIMEOUT', gt=0, le=120)
     METADOCKER_MAX_TICK_AGE_SECONDS: float = Field(10.0, validation_alias='METADOCKER_MAX_TICK_AGE_SECONDS', gt=0, le=300)
+    METADOCKER_ALLOWED_HOSTS: str = Field('', validation_alias='METADOCKER_ALLOWED_HOSTS')
+    METADOCKER_REQUIRE_HTTPS: bool = Field(True, validation_alias='METADOCKER_REQUIRE_HTTPS')
     
     @property
     def gateway_config(self):
