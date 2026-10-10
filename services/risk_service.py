@@ -10,6 +10,7 @@ import logging
 
 from core.models import TradeSignal, CalculatedTrade
 from config.constants import PIP_MULTIPLIERS, JPY_SYMBOLS
+from services.risk_limits import get_risk_limits
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,7 @@ class RiskService:
     """
     
     def __init__(self):
-        self.default_risk_factor = 0.01  # 1%
-        self.max_risk_factor = 0.05  # 5%
-        self.min_risk_factor = 0.001  # 0.1%
+        self.min_risk_factor, self.max_risk_factor, self.default_risk_factor = get_risk_limits()
     
     def calculate_position_size(self, balance: float, stop_loss_pips: int,
                                 risk_factor: float, symbol: str) -> float:
@@ -168,8 +167,12 @@ class RiskService:
         configured_max = self.max_risk_factor
         configured_min = self.min_risk_factor
         if user_settings:
-            configured_max = float(user_settings.get('max_risk_per_trade', configured_max))
-            configured_min = float(user_settings.get('min_risk_per_trade', configured_min))
+            requested_max = float(user_settings.get('max_risk_per_trade', configured_max))
+            requested_min = float(user_settings.get('min_risk_per_trade', configured_min))
+            if not math.isfinite(requested_max) or not math.isfinite(requested_min):
+                raise ValueError('Risk limits must be finite and positive')
+            configured_max = min(self.max_risk_factor, requested_max)
+            configured_min = max(self.min_risk_factor, requested_min)
         if not math.isfinite(configured_max) or not math.isfinite(configured_min) or configured_max <= 0 or configured_min <= 0:
             raise ValueError('Risk limits must be finite and positive')
         if risk > configured_max:

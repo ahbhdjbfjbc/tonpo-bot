@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from config.settings import settings
 from database.database import db_manager
-from database.models import User, AdminRole
+from database.models import User
 from database.repositories import UserRepository
 from services.auth import AuthService
 
@@ -84,14 +84,9 @@ def get_optional_user_strict(
     return user
 
 
-def require_admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Temporary fail-closed admin gate: only explicitly configured IDs are privileged."""
     admin_ids = set(getattr(settings, "ADMIN_USER_IDS", []) or [])
     if user.telegram_id in admin_ids:
-        return user
-    role = db.query(AdminRole).filter(
-        AdminRole.telegram_id == user.telegram_id,
-        AdminRole.is_active == True,  # noqa: E712
-    ).first()
-    if role:
         return user
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

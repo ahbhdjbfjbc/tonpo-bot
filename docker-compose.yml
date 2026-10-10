@@ -39,7 +39,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://tonpo:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tonpo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
       PYTHONPATH: /app
     depends_on:
       postgres:
@@ -47,12 +47,14 @@ services:
     restart: "no"
     command: ["alembic", "upgrade", "head"]
 
+  # Keep this service at one replica: DBPersistence uses process-local state and
+  # enforces the singleton with a PostgreSQL advisory lock.
   tonpo-bot:
     build: .
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://tonpo:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tonpo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       TRADING_DRY_RUN: ${TRADING_DRY_RUN:-true}
       PYTHONPATH: /app
@@ -73,7 +75,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://tonpo:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tonpo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       TRADING_DRY_RUN: ${TRADING_DRY_RUN:-true}
       WEB_HOST: 0.0.0.0

@@ -4,9 +4,10 @@ import json
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlsplit
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator, Field
+from pydantic import field_validator, model_validator, Field
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
+from config.webhook import require_webhook_url, validate_webhook_url
 
 # Load environment variables from .env file
 load_dotenv()
@@ -88,11 +89,14 @@ class Settings(BaseSettings):
     TELEGRAM_READ_TIMEOUT: float = Field(15.0, validation_alias='TELEGRAM_READ_TIMEOUT', gt=0, le=120)
     TELEGRAM_WRITE_TIMEOUT: float = Field(15.0, validation_alias='TELEGRAM_WRITE_TIMEOUT', gt=0, le=120)
     TELEGRAM_POOL_TIMEOUT: float = Field(5.0, validation_alias='TELEGRAM_POOL_TIMEOUT', gt=0, le=60)
+    REGISTRATION_PASSWORD_TTL_SECONDS: int = Field(
+        300, validation_alias='REGISTRATION_PASSWORD_TTL_SECONDS', gt=0, le=3600
+    )
     TELEGRAM_PROXY: Optional[str] = Field(None, validation_alias='TELEGRAM_PROXY')
     ADMIN_USER_IDS: List[int] = Field(default=[], validation_alias='ADMIN_USER_IDS')
     USE_WEBHOOK: bool = Field(False, validation_alias='USE_WEBHOOK')
     WEBHOOK_URL: Optional[str] = Field(None, validation_alias='WEBHOOK_URL')
-    WEBHOOK_PORT: int = Field(8443, validation_alias='WEBHOOK_PORT')
+    WEBHOOK_PORT: int = Field(8443, validation_alias='WEBHOOK_PORT', ge=1, le=65535)
     WEBHOOK_HOST: str = Field("0.0.0.0", validation_alias='WEBHOOK_HOST')
     
     @field_validator('BOT_TOKEN')
@@ -111,6 +115,16 @@ class Settings(BaseSettings):
         if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password:
             raise ValueError('WEB_APP_URL must be an HTTPS URL without embedded credentials')
         return v.rstrip('/')
+
+    @field_validator('WEBHOOK_URL')
+    @classmethod
+    def validate_webhook_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_webhook_url(v)
+
+    @model_validator(mode='after')
+    def require_webhook_url_when_enabled(self):
+        require_webhook_url(self.USE_WEBHOOK, self.WEBHOOK_URL)
+        return self
     
     @field_validator('ADMIN_USER_IDS', mode='before')
     @classmethod
@@ -250,6 +264,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_CALCULATIONS: int = Field(10, validation_alias='RATE_LIMIT_CALCULATIONS')
     RATE_LIMIT_BALANCE: int = Field(30, validation_alias='RATE_LIMIT_BALANCE')
     RATE_LIMIT_POSITIONS: int = Field(20, validation_alias='RATE_LIMIT_POSITIONS')
+    RATE_LIMIT_SETTINGS: int = Field(20, validation_alias='RATE_LIMIT_SETTINGS')
+    RATE_LIMIT_DEFAULT: int = Field(30, validation_alias='RATE_LIMIT_DEFAULT')
     
     # Subscription Plans (prices in USD)
     FREE_PLAN_MAX_TRADES: int = Field(10, validation_alias='FREE_PLAN_MAX_TRADES')
@@ -302,6 +318,8 @@ class Settings(BaseSettings):
     TRADING_DRY_RUN: bool = Field(True, validation_alias='TRADING_DRY_RUN')
     ENABLE_API_ACCESS: bool = Field(True, validation_alias='ENABLE_API_ACCESS')
     ENABLE_WEBHOOKS: bool = Field(False, validation_alias='ENABLE_WEBHOOKS')
+    MAX_SIGNAL_AGE_SECONDS: int = Field(300, validation_alias='MAX_SIGNAL_AGE_SECONDS', gt=0, le=86400)
+    MAX_FUTURE_SIGNAL_SKEW_SECONDS: int = Field(30, validation_alias='MAX_FUTURE_SIGNAL_SKEW_SECONDS', ge=0, le=3600)
     TRADINGVIEW_WEBHOOK_SECRET: Optional[str] = Field(None, validation_alias='TRADINGVIEW_WEBHOOK_SECRET')
     # A webhook secret is bound to one configured Telegram account; identity is never accepted from payloads.
     TRADINGVIEW_TELEGRAM_ID: Optional[int] = Field(None, validation_alias='TRADINGVIEW_TELEGRAM_ID')

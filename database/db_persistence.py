@@ -8,6 +8,7 @@ import logging
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from telegram.ext import BasePersistence
 from telegram.ext._utils.types import CDCData, ConversationDict, ConversationKey
@@ -22,6 +23,7 @@ _USER_KEY   = "user_data"
 _CHAT_KEY   = "chat_data"
 _BOT_KEY    = "bot_data"
 _CALLBACK_KEY = "callback_data"
+_BOT_SINGLETON_LOCK_KEY = 731945206403
 _SENSITIVE_USER_DATA_KEYS = frozenset({
     'password', 'mt5_password', 'secret', 'webhook_secret',
     'token', 'access_token', 'refresh_token', 'session_token',
@@ -84,8 +86,9 @@ def _save(key: str, value: Any) -> None:
 class DBPersistence(BasePersistence):
     """
     PostgreSQL-backed persistence for PTB.
-    All reads/writes go to the bot_persistence_store table.
-    Atomic commits mean a crash can never corrupt the state.
+    All reads/writes go to the bot_persistence_store table. The in-memory
+    snapshot is intentionally single-instance; PostgreSQL advisory locking
+    prevents two bot processes from overwriting one another's state.
     """
 
     def __init__(self):
@@ -96,6 +99,42 @@ class DBPersistence(BasePersistence):
         self._bot_data: Dict      = {}
         self._callback_data: Optional[CDCData] = None
         self._loaded = False
+        self._instance_lock_connection = None
+
+    def acquire_single_instance_lock(self) -> None:
+        """Hold a PostgreSQL session lock for the bot's entire process lifetime."""
+        if self._instance_lock_connection is not None:
+            return
+        engine = getattr(db_manager, "engine", None)
+        if engine is None:
+            raise RuntimeError("Database must be initialized before bot startup")
+        if engine.dialect.name != "postgresql":
+            logger.warning("DBPersistence singleton lock requires PostgreSQL; local SQLite is development-only")
+            return
+        connection = engine.connect()
+        try:
+            acquired = bool(connection.execute(
+                text("SELECT pg_try_advisory_lock(:lock_key)"),
+                {"lock_key": _BOT_SINGLETON_LOCK_KEY},
+            ).scalar())
+            if not acquired:
+                raise RuntimeError("Another Telegram bot process already owns DBPersistence")
+            self._instance_lock_connection = connection
+        except Exception:
+            connection.close()
+            raise
+
+    def release_single_instance_lock(self) -> None:
+        connection, self._instance_lock_connection = self._instance_lock_connection, None
+        if connection is None:
+            return
+        try:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:lock_key)"),
+                {"lock_key": _BOT_SINGLETON_LOCK_KEY},
+            )
+        finally:
+            connection.close()
 
     def _ensure_loaded(self):
         if self._loaded:

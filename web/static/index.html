@@ -7,24 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            surface: { 900: '#0a0e17', 800: '#0f1520', 700: '#151c2c', 600: '#1c2538', 500: '#243044' },
-            accent: { DEFAULT: '#3b82f6', soft: '#1d4ed8', glow: '#60a5fa' },
-            profit: '#22c55e', loss: '#ef4444', warn: '#f59e0b',
-          },
-          fontFamily: {
-            sans: ['IBM Plex Sans Arabic', 'system-ui', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-        }
-      }
-    }
-  </script>
+  <script src="/static/js/tailwind-config.js"></script>
   <link rel="stylesheet" href="/static/css/app.css" />
 </head>
 <body class="bg-surface-900 text-slate-200 font-sans antialiased min-h-screen">

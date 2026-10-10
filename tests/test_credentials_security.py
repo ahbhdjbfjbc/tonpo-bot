@@ -124,8 +124,23 @@ def test_registration_password_stays_out_of_persistent_user_data():
 
     assert result == ENTER_SERVER
     assert 'mt5_password' not in context.user_data
-    assert handler._pending_passwords[17] == 'dummy-test-password'
+    assert handler._pending_passwords[17][0] == 'dummy-test-password'
+    assert isinstance(handler._pending_passwords[17][1], float)
     assert replies
+
+
+def test_registration_password_is_purged_after_ttl(monkeypatch):
+    from bot import registration
+    from bot.registration import RegistrationHandler
+
+    handler = RegistrationHandler.__new__(RegistrationHandler)
+    handler._pending_passwords = {17: ('expired-test-password', 100.0), 18: ('fresh-test-password', 200.0)}
+    monkeypatch.setattr(registration.settings, 'REGISTRATION_PASSWORD_TTL_SECONDS', 300, raising=False)
+    monkeypatch.setattr(registration.time, 'monotonic', lambda: 401.0)
+
+    assert handler.purge_expired_pending_passwords() == 1
+    assert 17 not in handler._pending_passwords
+    assert handler._get_pending_password(18) == 'fresh-test-password'
 
 
 def test_database_user_data_persistence_filters_secret_fields(monkeypatch):

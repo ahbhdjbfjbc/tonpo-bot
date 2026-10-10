@@ -96,13 +96,21 @@ class UserRepository(BaseRepository):
         # Create user
         user = User(telegram_id=telegram_id, **kwargs)
         self.session.add(user)
-        self.session.flush()  # Get user.id
-        
-        # Create default settings
-        settings = UserSettings(user_id=user.id)
-        self.session.add(settings)
-        
-        self._safe_commit()
+        try:
+            self.session.flush()  # Get user.id; unique telegram_id arbitrates races.
+
+            # Create default settings in the same transaction as the user row.
+            settings = UserSettings(user_id=user.id)
+            self.session.add(settings)
+            self._safe_commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            # A concurrent registration may have won after the preflight SELECT.
+            # Translate only that case to the established duplicate-account error;
+            # preserve all unrelated integrity failures for diagnosis.
+            if self.get_by_telegram_id(telegram_id):
+                raise ValueError(f"User with telegram_id {telegram_id} already exists") from exc
+            raise
         logger.info(f"Created user {telegram_id} with ID {user.id}")
         
         return user

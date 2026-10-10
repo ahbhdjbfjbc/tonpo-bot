@@ -20,5 +20,7 @@ def upgrade():
 
 
 def downgrade():
-    # Credential deletion is intentionally irreversible; keep the safer nullable schema.
-    pass
+    # Secret values were erased in upgrade and cannot be reconstructed safely.
+    raise RuntimeError(
+        "Revision 012 is irreversible: persisted MT5 passwords were erased. Use a forward-fix or restore a tested backup."
+    )

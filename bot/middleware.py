@@ -11,7 +11,6 @@ from telegram.ext import CallbackContext
 from sqlalchemy.orm import Session
 
 from database.repositories import UserRepository
-from database.models import AdminRole
 from services.cache import CacheService, RateLimitUnavailable
 from services.notification import NotificationService
 from services.monitoring import MonitoringService
@@ -81,33 +80,7 @@ class AuthMiddleware:
             """Added *args, **kwargs to fix the error"""
             user_id = update.effective_user.id
             
-            permission = {
-                'dashboard': 'users.view', 'stats': 'statistics.view',
-                'broadcast': 'broadcast.send',
-            }.get(handler_func.__name__, 'users.view')
-            allowed = user_id in settings.ADMIN_USER_IDS
-            if not allowed:
-                try:
-                    role = self.db.query(AdminRole).filter_by(
-                        telegram_id=user_id, is_active=True
-                    ).first()
-                    role_permissions = {
-                        'SUPER_ADMIN': {'*'},
-                        'ADMIN': {'users.view', 'users.manage', 'plans.view', 'plans.manage',
-                                  'subscriptions.view', 'subscriptions.manage', 'trial.grant',
-                                  'trial.revoke', 'offers.view', 'offers.manage', 'support.view',
-                                  'support.reply', 'broadcast.send', 'statistics.view',
-                                  'settings.view', 'settings.manage', 'emergency_stop'},
-                        'SUPPORT': {'users.view', 'support.view', 'support.reply'},
-                        'MODERATOR': {'users.view', 'users.manage', 'support.view'},
-                        'ANALYST': {'statistics.view', 'users.view', 'plans.view', 'subscriptions.view'},
-                    }
-                    if role and role.role in role_permissions:
-                        permissions = set(role.permissions or []) or role_permissions[role.role]
-                        allowed = '*' in permissions or permission in permissions
-                except Exception:
-                    self.db.rollback()
-                    allowed = False
+            allowed = user_id in set(getattr(settings, 'ADMIN_USER_IDS', []) or [])
             if not allowed:
                 if update.effective_message:
                     await update.effective_message.reply_text("❌ وصول غير مصرح به.")
@@ -129,13 +102,20 @@ class RateLimitMiddleware:
     
     def __init__(self, cache_service: CacheService):
         self.cache = cache_service
+        def configured_limit(name: str, fallback: int) -> int:
+            try:
+                value = int(getattr(settings, name, fallback))
+            except (TypeError, ValueError):
+                value = fallback
+            return value if value > 0 else fallback
+
         self.default_limits = {
-            'trade': (5, 60),  # 5 trades per minute
-            'calculate': (10, 60),  # 10 calculations per minute
-            'balance': (30, 60),  # 30 balance checks per minute
-            'positions': (20, 60),  # 20 position checks per minute
-            'settings': (20, 60),  # 20 settings changes per minute
-            'default': (30, 60)  # Default 30 per minute
+            'trade': (configured_limit('RATE_LIMIT_TRADES', 5), 60),
+            'calculate': (configured_limit('RATE_LIMIT_CALCULATIONS', 10), 60),
+            'balance': (configured_limit('RATE_LIMIT_BALANCE', 30), 60),
+            'positions': (configured_limit('RATE_LIMIT_POSITIONS', 20), 60),
+            'settings': (configured_limit('RATE_LIMIT_SETTINGS', 20), 60),
+            'default': (configured_limit('RATE_LIMIT_DEFAULT', 30), 60),
         }
     
     def check_rate_limit(self, user_id: int, action: str = 'default') -> tuple:
@@ -148,18 +128,23 @@ class RateLimitMiddleware:
         limit, period = self.default_limits.get(action, self.default_limits['default'])
         
         # Try to get plan-specific multiplier
+        session = None
         try:
-        	from services.subscription import SubscriptionService
-        	from database.database import db_manager
-        	sub_service = SubscriptionService(db_manager.get_session())
-        	plan = sub_service.get_user_plan(user_id)
-        	if plan and plan.rate_limit_per_second:
-        		# Scale limits by plan's rate_limit_per_second relative to default (1)
-        		multiplier = plan.rate_limit_per_second
-        		limit = limit * multiplier
-        		
+            from services.subscription import SubscriptionService
+            from database.database import db_manager
+            session = db_manager.get_session()
+            sub_service = SubscriptionService(session)
+            plan = sub_service.get_user_plan(user_id)
+            if plan and plan.rate_limit_per_second:
+                # Scale limits by plan's rate_limit_per_second relative to default (1).
+                multiplier = float(plan.rate_limit_per_second)
+                if multiplier > 0:
+                    limit = max(1, int(limit * multiplier))
         except Exception:
-        	pass  # Fall back to default limits
+            pass  # Fall back to default limits.
+        finally:
+            if session is not None:
+                session.close()
         
         # The complete decision/update is one Redis-side atomic operation.
         # Redis failure is deliberately fail-closed for protected handlers.
@@ -179,17 +164,27 @@ class RateLimitMiddleware:
             @wraps(handler_func)
             async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
                 """Added *args, **kwargs to fix the error"""
+                if not update.effective_user:
+                    if update.effective_message:
+                        await update.effective_message.reply_text("❌ تعذر تحديد المستخدم.")
+                    return None
                 user_id = update.effective_user.id
                 
                 # Check rate limit
                 allowed, retry_after = self.check_rate_limit(user_id, action)
                 
                 if not allowed:
-                    await update.message.reply_text(
-                        f"⏳ *Rate limit exceeded*\n\n"
-                        f"يرجى الانتظار {retry_after} ثانية قبل المحاولة مجددًا.",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
+                    message = update.effective_message
+                    if message:
+                        await message.reply_text(
+                            f"⏳ *Rate limit exceeded*\n\n"
+                            f"يرجى الانتظار {retry_after} ثانية قبل المحاولة مجددًا.",
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+                    elif update.callback_query:
+                        await update.callback_query.answer(
+                            f"يرجى الانتظار {retry_after} ثانية.", show_alert=True
+                        )
                     return None
                 
                 # Call the original handler with ALL arguments
