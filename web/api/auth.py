@@ -12,6 +12,7 @@ from config.settings import settings
 from database.models import AdminRole, User
 from database.repositories import UserRepository
 from services.auth import AuthService
+from services.subscription import SubscriptionService
 from web.deps import get_auth_service, get_current_user, get_db
 from web.schemas import LoginRequest, TelegramWebAppLoginRequest, TokenResponse
 
@@ -64,6 +65,7 @@ def login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     authenticated = False
+    admin_authenticated = False
     if body.api_key:
         info = auth.validate_api_key(body.api_key)
         if info and info.get("telegram_id") == body.telegram_id:
@@ -76,9 +78,13 @@ def login(
         admin_ids = set(getattr(settings, "ADMIN_USER_IDS", []) or [])
         if body.telegram_id in admin_ids:
             authenticated = True
+            admin_authenticated = True
 
     if not authenticated:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if body.api_key and not admin_authenticated:
+        if not SubscriptionService(db).check_feature_access(body.telegram_id, "api_access"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API access is not included in your subscription")
 
     expires = timedelta(hours=settings.JWT_EXPIRY_HOURS)
     token = auth.generate_jwt(user.id, expires_delta=expires)

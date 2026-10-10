@@ -14,6 +14,7 @@ from config.settings import settings
 from database.models import ConnectionLog, EngineInstance, User
 from database.repositories import EngineInstanceRepository
 from services.auth import encrypt_gateway_api_key
+from services.subscription import SubscriptionService
 from gateway_client.metadocker import MetaDockerConnectionAdapter, MetaDockerError
 from web.deps import get_current_user, get_db
 from web.schemas import EngineInstanceIn, EngineInstanceOut, MT5StatusOut
@@ -81,6 +82,15 @@ async def bind_engine(
 ):
     """Bind one MetaDocker instance to this user/account, encrypted at rest."""
     _validate_engine_endpoint(payload.endpoint)
+    repository = EngineInstanceRepository(db)
+    existing = repository.list_for_user(user.id)
+    same_instance = any(row.engine_instance_id == payload.engine_instance_id for row in existing)
+    plan = SubscriptionService(db).get_user_plan(user.telegram_id)
+    if not same_instance and len([row for row in existing if row.is_active]) >= int(plan.max_connections):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your subscription connection limit has been reached",
+        )
     connection = MetaDockerConnectionAdapter(
         payload.endpoint,
         payload.api_key,
@@ -99,7 +109,7 @@ async def bind_engine(
     finally:
         await connection.close()
     try:
-        row = EngineInstanceRepository(db).upsert_for_user(
+        row = repository.upsert_for_user(
             user.id,
             engine_instance_id=payload.engine_instance_id,
             endpoint=payload.endpoint,
