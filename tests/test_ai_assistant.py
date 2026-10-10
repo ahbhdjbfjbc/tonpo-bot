@@ -37,16 +37,15 @@ def test_detect_arabic():
     assert detect_lang("hello there") == "en"
 
 
-def test_assistant_requires_auth():
-    from config.settings import settings
-    from unittest.mock import patch
-    # Use TestClient
+def test_assistant_allows_anonymous_guidance():
+    """Public guidance is allowed; account context remains optional."""
     os.environ["DATABASE_URL"] = "sqlite:////tmp/tonpo_ai_test.db"
     from fastapi.testclient import TestClient
     from web.app import app
     with TestClient(app) as c:
         r = c.post("/api/assistant/chat", json={"message": "hi"})
-        assert r.status_code == 401
+        assert r.status_code == 200
+        assert r.json()["context"] == {}
 
 
 def test_assistant_rejects_malformed_token():

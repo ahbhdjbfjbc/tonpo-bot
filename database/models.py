@@ -102,6 +102,7 @@ class User(Base):
     trades = relationship("Trade", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     connection_logs = relationship("ConnectionLog", back_populates="user", cascade="all, delete-orphan")
+    engine_instances = relationship("EngineInstance", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     
     # Indexes
@@ -313,6 +314,38 @@ class ConnectionLog(Base):
     
     __table_args__ = (
         Index('idx_connection_user_date', 'user_id', 'created_at'),
+    )
+
+
+class EngineInstance(Base):
+    """Durable one-user-to-one-MT5-engine binding.
+
+    The API key is encrypted with the existing Fernet credential service. The
+    table stores an account reference, never an MT5 password.
+    """
+    __tablename__ = 'engine_instances'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    engine_instance_id = Column(String(128), nullable=False, unique=True)
+    provider = Column(String(32), nullable=False, default='metadocker', server_default='metadocker')
+    endpoint = Column(String(255), nullable=False)
+    account_reference = Column(String(100), nullable=False)
+    api_key_ciphertext = Column(Text, nullable=False)
+    engine_version = Column(String(64), nullable=True)
+    status = Column(String(24), nullable=False, default='unknown', server_default='unknown')
+    provision_status = Column(String(24), nullable=False, default='active', server_default='active')
+    last_health_at = Column(DateTime, nullable=True)
+    last_session = Column(Integer, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default='true')
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    user = relationship("User", back_populates="engine_instances")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'account_reference', name='uq_engine_user_account'),
+        Index('idx_engine_user_active', 'user_id', 'is_active'),
     )
 
 

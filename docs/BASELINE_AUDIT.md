@@ -30,21 +30,26 @@
 |---|---|---|
 | صياغة Python | PASS | `python -m compileall -q bot config core database gateway_client services utils web main.py`، exit 0 |
 | جمع الاختبارات | PASS | `python -m pytest --collect-only -q`، exit 0 |
-| الاختبارات | FAIL | `python -m pytest -q --disable-warnings`؛ فشل `tests/test_guest_mode.py::test_assistant_allows_public_guidance_but_uses_optional_account_context` |
+| الاختبارات | PASS | `python -m pytest -q --disable-warnings`؛ 236 اختبارًا ناجحًا |
 | CI dependency install | PASS بعد إصلاح | تعارض `pylint 3.3.0`/`isort 6.0.1` عولج بـ `isort 5.13.2` |
 | MetaDocker runtime | BLOCKED | لا توجد خدمة أو حساب MT5 Demo أو API key |
 | E2E TradingView → MT5 | NOT TESTED | لا توجد بيئة Engine/Broker تجريبية |
 | عزل حسابين | NOT TESTED | لا توجد مثيلات MetaDocker وحسابان Demo |
 | Migrations على PostgreSQL فعلي | NOT TESTED | لا توجد قاعدة PostgreSQL runtime متاحة في الفحص |
 
-## المشكلة الاختبارية الحالية
+## الإصلاحات المنفذة في المرحلة الحالية
 
-`web/api/assistant.py` يستورد ويستخدم `get_current_user` لمسار `/chat`، بينما الاختبار يرفض ظهور هذا الاسم في الملف ويطلب guest guidance. هذا تعارض سلوكي/اختباري يحتاج قرارًا أمنيًا موثقًا؛ لم يتم إضعاف المصادقة لإرضاء الاختبار.
+- أضيف `EngineInstance` وmigration `023_add_engine_instances` بملكية فريدة لكل مستخدم/حساب.
+- أضيف `EngineInstanceRepository` مع منع ربط محرك مملوك لمستخدم آخر.
+- أضيف `MetaDockerConnectionAdapter` و`MetaDockerExecutionProvider` مع قراءة الربط من قاعدة البيانات.
+- أضيفت واجهات `/api/mt5/engines` و`PUT /api/mt5/engine` و`DELETE /api/mt5/engine/{id}` دون إعادة عرض المفتاح.
+- أضيفت اختبارات mocked للتسعير والمواصفات والـ retcodes وtimeouts وفصل IDs، واختبار عزل مستخدمين.
+- أصبح مساعد الإرشاد العام متاحًا للزائر، مع رفض أي token غير صالح أو منتهي بـ 401.
 
 ## قيود وموانع الإطلاق
 
 - MetaDocker وMT5/Broker demo غير متوفرين.
 - لا يوجد إثبات تنفيذ أو إغلاق أو reconciliation.
-- الاختبارات الأساسية ليست خضراء.
+- الاختبارات الأساسية خضراء محليًا، لكن CI البعيد لم يُتحقق من تشغيله بعد.
 - جودة Flake8/Mypy تحتوي مخالفات قديمة، ولذلك هي advisory في CI حاليًا.
 - التداول الحقيقي يجب أن يبقى معطلاً.

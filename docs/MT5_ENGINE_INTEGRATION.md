@@ -2,7 +2,7 @@
 
 ## حالة التحقق
 
-**الحالة: VERIFIED FOR DOCUMENTATION / NOT INTEGRATED / LIVE DEMO BLOCKED**
+**الحالة: VERIFIED / MOCKED ADAPTER INTEGRATED / LIVE DEMO BLOCKED**
 
 تمت مراجعة المستودع الرسمي عند:
 
@@ -36,6 +36,13 @@ MetaDocker يضع REST/WebSocket/gRPC أمام طرفية MetaTrader 5. الوا
 5. عند timeout بعد الإرسال: الحالة `UNKNOWN`، ولا إعادة إرسال تلقائية؛ يلزم reconciliation عبر history/positions.
 6. فصل provisioning عن Web/API. لا Docker socket في التطبيق.
 7. حفظ `engine_instance_id`, account reference, key reference, engine version, health state، وprovision state دائمًا في قاعدة البيانات.
+
+## ما تم تنفيذه محليًا
+
+- `gateway_client/metadocker.py` يعزل HTTP عن منطق المخاطر.
+- `MetaDockerExecutionProvider` يقرأ `engine_instances` من قاعدة البيانات لكل `telegram_id`.
+- `EngineInstanceRepository` يمنع امتلاك نفس engine instance من مستخدمين مختلفين.
+- اختبارات mocked تغطي account/symbol/tick/positions/retcodes/timeout وفصل IDs.
 
 ## ما لم يُختبر
 

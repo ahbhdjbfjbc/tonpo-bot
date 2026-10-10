@@ -67,6 +67,23 @@ def get_optional_user(
     return user
 
 
+def get_optional_user_strict(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+    auth: AuthService = Depends(get_auth_service),
+) -> Optional[User]:
+    """Allow anonymous access, but never silently ignore a supplied bad token."""
+    if not credentials or not credentials.credentials:
+        return None
+    payload = auth.verify_jwt(credentials.credentials)
+    if not payload or "user_id" not in payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    user = db.query(User).filter(User.id == payload["user_id"]).first()
+    if not user or not user.is_active or user.is_banned:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account unavailable")
+    return user
+
+
 def require_admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
     admin_ids = set(getattr(settings, "ADMIN_USER_IDS", []) or [])
     if user.telegram_id in admin_ids:

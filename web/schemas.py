@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 import math
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -178,5 +179,48 @@ class MT5StatusOut(BaseModel):
     free_margin: Optional[float] = None
     last_heartbeat: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
+
+
+class EngineInstanceIn(BaseModel):
+    """User-owned MetaDocker binding; the API key is write-only."""
+    model_config = ConfigDict(extra="forbid")
+
+    engine_instance_id: str = Field(min_length=1, max_length=128)
+    endpoint: str = Field(min_length=8, max_length=255)
+    account_reference: str = Field(min_length=1, max_length=100)
+    api_key: str = Field(min_length=24, max_length=512)
+    engine_version: Optional[str] = Field(None, max_length=64)
+
+    @field_validator("engine_instance_id", "account_reference")
+    @classmethod
+    def safe_reference(cls, value: str) -> str:
+        value = value.strip()
+        if not value or any(char in value for char in "\r\n\t"):
+            raise ValueError("invalid engine reference")
+        return value
+
+    @field_validator("endpoint")
+    @classmethod
+    def safe_endpoint(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("endpoint must be an HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("endpoint must not contain credentials or query data")
+        return value
+
+
+class EngineInstanceOut(BaseModel):
+    engine_instance_id: str
+    provider: str
+    endpoint: str
+    account_reference: str
+    engine_version: Optional[str] = None
+    status: str
+    provision_status: str
+    is_active: bool
+    last_health_at: Optional[str] = None
+    last_session: Optional[int] = None
     dry_run: bool = True
     message: Optional[str] = None

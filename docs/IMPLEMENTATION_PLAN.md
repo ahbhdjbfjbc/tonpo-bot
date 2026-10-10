@@ -24,6 +24,17 @@
 - توحيد اسم قاعدة البيانات `tonpo_bot` والمستخدم `tonpo`.
 - CI لـ compileall وpytest وcoverage.
 - إصلاح تعارض `pylint==3.3.0` مع `isort` باستخدام `isort==5.13.2`.
+- إنشاء `engine_instances` وmigration `023_add_engine_instances` لربط دائم لكل مستخدم/حساب.
+- إضافة `MetaDockerConnectionAdapter` و`MetaDockerExecutionProvider` مع اختبارات mocked.
+- إضافة API آمن لربط/عرض/تعطيل المحرك دون عرض API key.
+- جعل guest assistant إرشاديًا فقط، مع رفض tokens غير الصالحة.
+
+## ما بقي قبل Demo
+
+- تشغيل migration على PostgreSQL فعلي واختبار rollback حيث يكون آمنًا.
+- توفير MetaDocker `v1.0.1` على شبكة خاصة وحسابي MT5 Demo منفصلين.
+- تنفيذ provisioning منفصل محدود الصلاحيات، ثم اختبار reconciliation والعزل الفعلي.
+- إضافة اختبارات webhook المتزامنة واختبارات الضغط.
 
 ## بوابات منع الإطلاق
 

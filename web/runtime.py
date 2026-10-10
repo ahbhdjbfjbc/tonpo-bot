@@ -42,11 +42,19 @@ async def initialize_web_execution_provider() -> Any:
         return _execution_provider
 
     from config.settings import settings
-    from gateway_client import ExecutionProvider
+    from gateway_client import ExecutionProvider, MetaDockerExecutionProvider
 
-    provider = ExecutionProvider(use_gateway=bool(getattr(settings, "USE_GATEWAY", True)))
+    if str(getattr(settings, "ENGINE_PROVIDER", "tonpo")).lower() == "metadocker":
+        from database.database import db_manager
+
+        provider = MetaDockerExecutionProvider(
+            db_manager.get_session,
+            timeout=float(getattr(settings, "METADOCKER_REQUEST_TIMEOUT", 15.0)),
+        )
+    else:
+        provider = ExecutionProvider(use_gateway=bool(getattr(settings, "USE_GATEWAY", True)))
     set_runtime(execution_provider=provider)
-    if not bool(getattr(settings, "TRADING_DRY_RUN", True)):
+    if not bool(getattr(settings, "TRADING_DRY_RUN", True)) and hasattr(provider, "initialize"):
         await provider.initialize(settings.gateway_config)
     return provider
 
@@ -88,9 +96,14 @@ async def get_gateway_connection(user) -> Any:
     Returns None when gateway is not wired or credentials missing.
     Never invents account data.
     """
+    from config.settings import settings
+
+    if bool(getattr(settings, "TRADING_DRY_RUN", True)):
+        return None
     if _execution_provider is None:
         return None
-    if not getattr(user, "has_gateway_credentials", False):
+    provider_name = getattr(_execution_provider, "provider_name", "tonpo")
+    if provider_name != "metadocker" and not getattr(user, "has_gateway_credentials", False):
         return None
     try:
         return await _execution_provider.get_connection(user.telegram_id)
