@@ -14,15 +14,31 @@ def get_mini_app_keyboard() -> Optional[InlineKeyboardMarkup]:
     ]])
 
 
-def get_confirmation_keyboard() -> InlineKeyboardMarkup:
+def get_confirmation_keyboard(action: Optional[str] = None) -> InlineKeyboardMarkup:
     """Get yes/no confirmation keyboard"""
+    if action == 'close_all_positions':
+        yes_callback = 'position_close_all:yes'
+        no_callback = 'position_close_all:no'
+    else:
+        yes_callback = 'confirm_yes'
+        no_callback = 'confirm_no'
     keyboard = [
         [
-            InlineKeyboardButton("✅ نعم", callback_data='confirm_yes'),
-            InlineKeyboardButton("❌ لا", callback_data='confirm_no')
+            InlineKeyboardButton("✅ نعم", callback_data=yes_callback),
+            InlineKeyboardButton("❌ لا", callback_data=no_callback)
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def get_close_all_positions_keyboard() -> InlineKeyboardMarkup:
+    """Offer the existing close-all feature only when positions are present."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "إغلاق جميع الصفقات",
+            callback_data='position_close_all',
+        )
+    ]])
 
 
 def get_risk_keyboard() -> InlineKeyboardMarkup:

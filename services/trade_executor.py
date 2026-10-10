@@ -6,6 +6,7 @@ import asyncio
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import logging
+import traceback
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.orm import Session
 
@@ -116,6 +117,7 @@ class TradeExecutor:
         }
         trade_record = None
         results = []
+        reserved_at = None
         try:
             # Step 1: Parse signal
             logger.info(f"Parsing signal for user {user_id}")
@@ -250,6 +252,19 @@ class TradeExecutor:
                     'error': 'Duplicate signal detected',
                     'status': 'duplicate'
                 }
+
+            # The earlier limit check is informational. Reserve with a conditional
+            # database update immediately before creating the durable intent so
+            # concurrent workers cannot both consume the final slot.
+            can_reserve, reservation = self.sub_service.reserve_trade_slot(user_id)
+            if not can_reserve:
+                return {
+                    'success': False,
+                    'error': 'Daily trade limit reached',
+                    'limit_info': reservation,
+                    'status': 'limit_reached',
+                }
+            reserved_at = reservation['reserved_at']
             
             # Step 10: Persist a durable intent before any broker mutation.
             # If the broker call later times out or raises, reconciliation has a
@@ -351,9 +366,13 @@ class TradeExecutor:
             trade_record.status = execution_status
             trade_record.executed_at = datetime.utcnow() if execution_status == 'executed' else None
 
-            # Step 12: Update user stats
-            self.sub_service.increment_trade_count(user_id)
-            user.total_volume += calculated.position_size
+            # Daily slots are reserved atomically before intent creation. Only
+            # accepted pending orders or verified executions enter success totals;
+            # unknown/partial outcomes keep their reservation for reconciliation.
+            if execution_status in {'executed', 'pending'}:
+                self.sub_service.record_trade_statistics(user_id, calculated.position_size)
+            elif execution_status == 'failed' and reserved_at is not None:
+                self.sub_service.release_trade_slot(user_id, reserved_at)
             
             self.db.commit()
             
@@ -406,7 +425,7 @@ class TradeExecutor:
                 'status': execution_status
             }
             
-        except Exception:
+        except Exception as exc:
             self.db.rollback()
             if trade_record is not None and getattr(trade_record, 'id', None) is not None:
                 try:
@@ -417,7 +436,17 @@ class TradeExecutor:
                     self.db.commit()
                 except Exception:
                     self.db.rollback()
-            logger.error("Trade execution outcome unknown for user %s; error details redacted", user_id)
+            frames = traceback.extract_tb(exc.__traceback__)
+            error_location = (
+                f"{frames[-1].filename}:{frames[-1].lineno}:{frames[-1].name}"
+                if frames else "unknown"
+            )
+            logger.error(
+                "Trade execution outcome unknown for user %s (exception_type=%s, location=%s)",
+                user_id,
+                type(exc).__name__,
+                error_location,
+            )
             try:
                 await self.notification.notify_trade_failed(user_id, 'Execution status unknown', {
                     'signal': signal_text[:100]

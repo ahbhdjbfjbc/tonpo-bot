@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from database.models import AdminRole, User
+from database.models import User
 from database.repositories import UserRepository
 from services.auth import AuthService
 from services.subscription import SubscriptionService
@@ -21,14 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 def _is_admin(user: User, db: Session | None = None) -> bool:
-    if user.telegram_id in set(getattr(settings, "ADMIN_USER_IDS", []) or []):
-        return True
-    if db is None or not hasattr(db, "query"):
-        return False
-    return db.query(AdminRole).filter(
-        AdminRole.telegram_id == user.telegram_id,
-        AdminRole.is_active == True,  # noqa: E712
-    ).first() is not None
+    # Keep the public UI flag aligned with the fail-closed API authorization gate.
+    return user.telegram_id in set(getattr(settings, "ADMIN_USER_IDS", []) or [])
 
 
 def _user_public(user: User, db: Session | None = None) -> dict:

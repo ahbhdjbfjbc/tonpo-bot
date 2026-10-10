@@ -27,7 +27,18 @@
     trade: 'تفاصيل الصفقة',
   };
 
-  let token = localStorage.getItem('tonpo_token') || '';
+  let token = '';
+  try {
+    token = sessionStorage.getItem('tonpo_token') || '';
+    if (!token) {
+      const legacyToken = localStorage.getItem('tonpo_token') || '';
+      if (legacyToken) {
+        token = legacyToken;
+        sessionStorage.setItem('tonpo_token', token);
+        localStorage.removeItem('tonpo_token');
+      }
+    }
+  } catch (_) { /* Session can still be used in memory when storage is disabled. */ }
   let currentUser = null;
   let guestMode = false;
   let currentPage = 'dashboard';
@@ -71,7 +82,8 @@
     token = '';
     currentUser = null;
     guestMode = false;
-    localStorage.removeItem('tonpo_token');
+    try { sessionStorage.removeItem('tonpo_token'); } catch (_) {}
+    try { localStorage.removeItem('tonpo_token'); } catch (_) {}
     showLogin();
   }
 
@@ -79,7 +91,8 @@
     token = '';
     currentUser = null;
     guestMode = true;
-    localStorage.removeItem('tonpo_token');
+    try { sessionStorage.removeItem('tonpo_token'); } catch (_) {}
+    try { localStorage.removeItem('tonpo_token'); } catch (_) {}
     showApp();
     applyUserVisibility();
     const sidebarUser = document.getElementById('sidebar-user');
@@ -95,7 +108,8 @@
     token = data.access_token;
     currentUser = data.user;
     guestMode = false;
-    localStorage.setItem('tonpo_token', token);
+    try { sessionStorage.setItem('tonpo_token', token); } catch (_) {}
+    try { localStorage.removeItem('tonpo_token'); } catch (_) {}
     showApp();
     applyUserVisibility();
     document.getElementById('sidebar-user').textContent =
@@ -111,7 +125,8 @@
     token = data.access_token;
     currentUser = data.user;
     guestMode = false;
-    localStorage.setItem('tonpo_token', token);
+    try { sessionStorage.setItem('tonpo_token', token); } catch (_) {}
+    try { localStorage.removeItem('tonpo_token'); } catch (_) {}
     showApp();
     applyUserVisibility();
     document.getElementById('sidebar-user').textContent =
@@ -188,12 +203,12 @@
   }
   function empty(msg) {
     return `<div class="empty-state">
-      <svg class="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
-      <p>${msg}</p>
+      <svg class="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A2 2 0 006.586 13H4"/></svg>
+      <p>${escapeHtml(msg)}</p>
     </div>`;
   }
   function errorBox(msg) {
-    return `<div class="card border-loss/30 bg-loss/5 text-loss text-sm">${msg}</div>`;
+    return `<div class="card border-loss/30 bg-loss/5 text-loss text-sm">${escapeHtml(msg)}</div>`;
   }
 
   // ── Pages ─────────────────────────────────────────────────────────────────
@@ -313,15 +328,15 @@
     html += `<div class="premium-status-grid mb-5">${stateBadge('Trading Engine', engineState)}${stateBadge('TradingView', tvConfigured ? 'CONFIGURED' : 'NOT CONFIGURED')}${stateBadge('News Protection', newsState)}${stateBadge('MT5 Account', a.connected ? 'CONNECTED' : 'NOT CONNECTED')}${stateBadge('Subscription', trialActiveLabel(sub))}${stateBadge('DRY RUN', 'ON')}</div>`;
     html += `<div class="card mb-5 value-proposition"><div class="card-title">Why Tonpo?</div><p class="text-slate-200">Tonpo validates signals, checks risk, protects against major news, and explains every decision before execution.</p><div class="value-grid mt-4"><span>Signal Intelligence</span><span>Risk Protection</span><span>News Protection</span><span>Explainable Execution</span><span>User Isolation</span><span>Subscription-controlled automation</span></div></div>`;
     html += `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">`;
-    for (const c of cards) html += `<div class="card"><div class="card-title">${c.title}</div><div class="card-value text-base ${c.cls || ''}">${c.value}</div><div class="card-sub">${c.sub || ''}</div></div>`;
+    for (const c of cards) html += `<div class="card"><div class="card-title">${escapeHtml(c.title)}</div><div class="card-value text-base ${c.cls || ''}">${escapeHtml(c.value)}</div><div class="card-sub">${escapeHtml(c.sub || '')}</div></div>`;
     html += `</div>`;
     const trial = sub.trial || {};
-    html += `<div class="grid lg:grid-cols-3 gap-4 mb-4"><div class="card"><div class="card-title">Account / Subscription</div><div class="text-lg font-semibold text-white">${sub.plan || data.user?.subscription_tier || 'free'}</div><div class="mt-2">${trial.active ? `<span class="badge badge-blue">Trial active</span><div class="card-sub mt-2">متبقٍ ${trial.remaining_days} يوم — حتى ${trial.ends_at ? new Date(trial.ends_at).toLocaleDateString('ar') : '—'}</div>` : `<span class="badge ${sub.available ? 'badge-green' : 'badge-red'}">${sub.available ? 'الميزة متاحة' : 'الميزة غير متاحة'}</span>${sub.available ? '' : '<div class="card-sub mt-2">الترقية مطلوبة للمتابعة.</div>'}`}</div></div><div class="card"><div class="card-title">Trading Status</div><div class="status-line"><span class="status-dot ${a.connected ? 'ok' : 'bad'}"></span><span>MT5: ${a.connected ? 'متصل' : 'غير متصل'}</span></div><div class="status-line"><span class="status-dot ok"></span><span>Engine: ${statuses.engine === 'dry_run' ? 'DRY RUN' : 'محظور'}</span></div><div class="status-line"><span class="status-dot ${news.status === 'inactive' ? 'ok' : 'warn'}"></span><span>News: ${news.status || 'غير متاح'}</span></div></div><div class="card"><div class="card-title">حماية الأخبار</div><div class="text-base font-semibold ${news.status === 'inactive' ? 'text-profit' : 'text-amber-300'}">${news.status === 'inactive' ? 'SAFE' : news.status === 'active' ? 'PROTECTED' : news.status === 'stale' || news.status === 'unavailable' ? 'STALE / UNAVAILABLE' : 'RESUMING'}</div><div class="card-sub mt-2">${news.reason || 'لا توجد بيانات مؤكدة.'}</div></div></div>`;
+    html += `<div class="grid lg:grid-cols-3 gap-4 mb-4"><div class="card"><div class="card-title">Account / Subscription</div><div class="text-lg font-semibold text-white">${escapeHtml(sub.plan || data.user?.subscription_tier || 'free')}</div><div class="mt-2">${trial.active ? `<span class="badge badge-blue">Trial active</span><div class="card-sub mt-2">متبقٍ ${escapeHtml(trial.remaining_days)} يوم — حتى ${trial.ends_at ? new Date(trial.ends_at).toLocaleDateString('ar') : '—'}</div>` : `<span class="badge ${sub.available ? 'badge-green' : 'badge-red'}">${sub.available ? 'الميزة متاحة' : 'الميزة غير متاحة'}</span>${sub.available ? '' : '<div class="card-sub mt-2">الترقية مطلوبة للمتابعة.</div>'}`}</div></div><div class="card"><div class="card-title">Trading Status</div><div class="status-line"><span class="status-dot ${a.connected ? 'ok' : 'bad'}"></span><span>MT5: ${a.connected ? 'متصل' : 'غير متصل'}</span></div><div class="status-line"><span class="status-dot ok"></span><span>Engine: ${statuses.engine === 'dry_run' ? 'DRY RUN' : 'محظور'}</span></div><div class="status-line"><span class="status-dot ${news.status === 'inactive' ? 'ok' : 'warn'}"></span><span>News: ${escapeHtml(news.status || 'غير متاح')}</span></div></div><div class="card"><div class="card-title">حماية الأخبار</div><div class="text-base font-semibold ${news.status === 'inactive' ? 'text-profit' : 'text-amber-300'}">${news.status === 'inactive' ? 'SAFE' : news.status === 'active' ? 'PROTECTED' : news.status === 'stale' || news.status === 'unavailable' ? 'STALE / UNAVAILABLE' : 'RESUMING'}</div><div class="card-sub mt-2">${escapeHtml(news.reason || 'لا توجد بيانات مؤكدة.')}</div></div></div>`;
     if (activity.has_data) {
-      html += `<div class="card mb-4"><div class="flex justify-between items-center mb-3"><div><div class="card-title">Today's Activity</div><div class="text-xs text-slate-500">بيانات اليوم الفعلية فقط</div></div></div><div class="grid grid-cols-2 md:grid-cols-5 gap-3"><div><div class="card-title">Signals received</div><div class="card-value text-base">${activity.signals_received ?? 0}</div></div><div><div class="card-title">Accepted</div><div class="card-value text-base text-profit">${activity.signals_accepted ?? 0}</div></div><div><div class="card-title">Rejected</div><div class="card-value text-base text-loss">${activity.signals_rejected ?? 0}</div></div><div><div class="card-title">Trades executed</div><div class="card-value text-base">${activity.trades_executed ?? 0}</div></div><div><div class="card-title">Active</div><div class="card-value text-base">${activity.trades_active ?? 0}</div></div></div></div>`;
+      html += `<div class="card mb-4"><div class="flex justify-between items-center mb-3"><div><div class="card-title">Today's Activity</div><div class="text-xs text-slate-500">بيانات اليوم الفعلية فقط</div></div></div><div class="grid grid-cols-2 md:grid-cols-5 gap-3"><div><div class="card-title">Signals received</div><div class="card-value text-base">${escapeHtml(activity.signals_received ?? 0)}</div></div><div><div class="card-title">Accepted</div><div class="card-value text-base text-profit">${escapeHtml(activity.signals_accepted ?? 0)}</div></div><div><div class="card-title">Rejected</div><div class="card-value text-base text-loss">${escapeHtml(activity.signals_rejected ?? 0)}</div></div><div><div class="card-title">Trades executed</div><div class="card-value text-base">${escapeHtml(activity.trades_executed ?? 0)}</div></div><div><div class="card-title">Active</div><div class="card-value text-base">${escapeHtml(activity.trades_active ?? 0)}</div></div></div></div>`;
     } else html += `<div class="card mb-4">${empty('لا توجد نشاطات اليوم — ستظهر الإشارات والصفقات الفعلية هنا.')}</div>`;
-    if (data.onboarding && !data.onboarding.ready) html += `<div class="card mb-4"><div class="flex justify-between items-center mb-3"><div><div class="card-title">Onboarding</div><div class="text-white font-semibold">أكمل المتطلبات الحقيقية قبل التداول</div></div><span class="badge badge-yellow">غير جاهز بعد</span></div><div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">${data.onboarding.steps.map(step => `<div class="onboarding-step ${step.complete ? 'complete' : ''}"><span>${step.complete ? '✓' : '○'}</span>${step.label}</div>`).join('')}</div></div>`;
-    html += `<div class="grid lg:grid-cols-2 gap-4"><div class="card !p-0 overflow-hidden"><div class="px-4 py-3 border-b border-surface-600 flex justify-between items-center"><span class="text-sm font-semibold text-white">آخر الإشارات</span><a href="#signals" class="text-xs text-accent-glow">عرض الكل</a></div>${data.recent_signals?.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>المصدر</th><th>الحالة</th><th>الوقت</th></tr></thead><tbody>${data.recent_signals.slice(0,8).map(s => `<tr><td class="mono text-xs">${s.source || '—'}</td><td>${statusBadge(s.status)}</td><td class="text-slate-500 text-xs">${s.created_at ? new Date(s.created_at).toLocaleString('ar') : '—'}</td></tr>`).join('')}</tbody></table></div>` : empty('No signals yet — ستظهر أول إشارة TradingView هنا.')}</div><div class="card !p-0 overflow-hidden"><div class="px-4 py-3 border-b border-surface-600 flex justify-between items-center"><span class="text-sm font-semibold text-white">آخر الصفقات</span><a href="#trades" class="text-xs text-accent-glow">عرض الكل</a></div>${data.recent_trades?.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الرمز</th><th>النوع</th><th>الحجم</th><th>الحالة</th></tr></thead><tbody>${data.recent_trades.slice(0,8).map(t => `<tr><td class="mono font-medium text-white">${t.symbol || '—'}</td><td>${t.order_type || '—'}</td><td class="mono">${t.position_size ?? '—'}</td><td>${statusBadge(t.status)}</td></tr>`).join('')}</tbody></table></div>` : empty('No trades yet — ستظهر الصفقات الفعلية بعد المرور بالضوابط.')}</div></div>`;
+    if (data.onboarding && !data.onboarding.ready) html += `<div class="card mb-4"><div class="flex justify-between items-center mb-3"><div><div class="card-title">Onboarding</div><div class="text-white font-semibold">أكمل المتطلبات الحقيقية قبل التداول</div></div><span class="badge badge-yellow">غير جاهز بعد</span></div><div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">${data.onboarding.steps.map(step => `<div class="onboarding-step ${step.complete ? 'complete' : ''}"><span>${step.complete ? '✓' : '○'}</span>${escapeHtml(step.label)}</div>`).join('')}</div></div>`;
+    html += `<div class="grid lg:grid-cols-2 gap-4"><div class="card !p-0 overflow-hidden"><div class="px-4 py-3 border-b border-surface-600 flex justify-between items-center"><span class="text-sm font-semibold text-white">آخر الإشارات</span><a href="#signals" class="text-xs text-accent-glow">عرض الكل</a></div>${data.recent_signals?.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>المصدر</th><th>الحالة</th><th>الوقت</th></tr></thead><tbody>${data.recent_signals.slice(0,8).map(s => `<tr><td class="mono text-xs">${escapeHtml(s.source || '—')}</td><td>${statusBadge(s.status)}</td><td class="text-slate-500 text-xs">${s.created_at ? new Date(s.created_at).toLocaleString('ar') : '—'}</td></tr>`).join('')}</tbody></table></div>` : empty('No signals yet — ستظهر أول إشارة TradingView هنا.')}</div><div class="card !p-0 overflow-hidden"><div class="px-4 py-3 border-b border-surface-600 flex justify-between items-center"><span class="text-sm font-semibold text-white">آخر الصفقات</span><a href="#trades" class="text-xs text-accent-glow">عرض الكل</a></div>${data.recent_trades?.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الرمز</th><th>النوع</th><th>الحجم</th><th>الحالة</th></tr></thead><tbody>${data.recent_trades.slice(0,8).map(t => `<tr><td class="mono font-medium text-white">${escapeHtml(t.symbol || '—')}</td><td>${escapeHtml(t.order_type || '—')}</td><td class="mono">${escapeHtml(t.position_size ?? '—')}</td><td>${statusBadge(t.status)}</td></tr>`).join('')}</tbody></table></div>` : empty('No trades yet — ستظهر الصفقات الفعلية بعد المرور بالضوابط.')}</div></div>`;
     el.innerHTML = html;
   }
 
@@ -333,13 +348,13 @@
     }
     let html = `<div class="card !p-0 overflow-hidden">
       <div class="px-4 py-3 border-b border-surface-600">
-        <span class="text-sm font-semibold text-white">الإشارات (${data.total})</span>
+        <span class="text-sm font-semibold text-white">الإشارات (${escapeHtml(data.total)})</span>
       </div>
       <div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr>
         <th>الرمز</th><th>الاتجاه</th><th>الدخول</th><th>SL</th><th>TP</th><th>المصدر</th><th>الحالة</th><th>السبب</th><th>الوقت</th>
       </tr></thead><tbody>`;
     for (const s of data.items) {
-      html += `<tr class="cursor-pointer hover:bg-surface-700/40" onclick="location.hash='signal/${s.id}'">
+      html += `<tr class="cursor-pointer hover:bg-surface-700/40" data-signal-id="${escapeHtml(s.id)}">
         <td class="mono font-medium text-white">${escapeHtml(s.symbol || '—')}</td>
         <td>${s.direction ? `<span class="badge ${s.direction.includes('BUY') || s.direction.includes('Buy') ? 'badge-green' : 'badge-red'}">${escapeHtml(s.direction)}</span>` : '—'}</td>
         <td class="mono">${escapeHtml(s.entry || '—')}</td>
@@ -353,6 +368,13 @@
     }
     html += `</tbody></table></div></div>`;
     el.innerHTML = html;
+    el.querySelectorAll('[data-signal-id]').forEach(row => {
+      row.addEventListener('click', () => {
+        const id = row.dataset.signalId || '';
+        if (/^\d+$/.test(id)) location.hash = `signal/${id}`;
+      });
+    });
+
   }
 
   async function renderTrades(el) {
@@ -363,13 +385,13 @@
     }
     let html = `<div class="card !p-0 overflow-hidden">
       <div class="px-4 py-3 border-b border-surface-600">
-        <span class="text-sm font-semibold text-white">الصفقات (${data.total})</span>
+        <span class="text-sm font-semibold text-white">الصفقات (${escapeHtml(data.total)})</span>
       </div>
       <div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr>
         <th>الرمز</th><th>النوع</th><th>الدخول</th><th>الحجم</th><th>المخاطرة</th><th>الحالة</th><th>الوقت</th>
       </tr></thead><tbody>`;
     for (const t of data.items) {
-      html += `<tr class="cursor-pointer hover:bg-surface-700/40" onclick="location.hash='trade/${t.id}'">
+      html += `<tr class="cursor-pointer hover:bg-surface-700/40" data-trade-id="${escapeHtml(t.id)}">
         <td class="mono font-medium text-white">${escapeHtml(t.symbol || '—')}</td>
         <td>${escapeHtml(t.order_type || '—')}</td>
         <td class="mono">${escapeHtml(t.entry_price ?? '—')}</td>
@@ -381,6 +403,13 @@
     }
     html += `</tbody></table></div></div>`;
     el.innerHTML = html;
+    el.querySelectorAll('[data-trade-id]').forEach(row => {
+      row.addEventListener('click', () => {
+        const id = row.dataset.tradeId || '';
+        if (/^\d+$/.test(id)) location.hash = `trade/${id}`;
+      });
+    });
+
   }
 
   async function renderResults(el) {
@@ -391,7 +420,7 @@
     if (!data.has_data && !data.has_signals) { el.innerHTML = html + `<div class="card">${empty('No data for selected period — لا توجد إشارات أو صفقات في الفترة المحددة.')}</div>`; return; }
     const m = data.metrics || {};
     const cards = [['الصفقات المغلقة', m.total_closed_trades], ['الرابحة', m.winning_trades], ['الخاسرة', m.losing_trades], ['نسبة الفوز', m.win_rate == null ? null : m.win_rate + '%'], ['إجمالي P/L', m.total_pnl]];
-    html += `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">${cards.map(([title,value]) => `<div class="card"><div class="card-title">${title}</div><div class="card-value text-base">${value == null ? '—' : title.includes('P/L') ? money(value) : value}</div></div>`).join('')}</div>`;
+    html += `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">${cards.map(([title,value]) => `<div class="card"><div class="card-title">${escapeHtml(title)}</div><div class="card-value text-base">${value == null ? '—' : title.includes('P/L') ? money(value) : escapeHtml(value)}</div></div>`).join('')}</div>`;
     const signals = data.signals || [];
     html += `<div class="card !p-0 overflow-hidden mb-4"><div class="px-4 py-3 border-b border-surface-600"><span class="text-sm font-semibold text-white">Signal decisions</span></div>${signals.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الوقت</th><th>المصدر</th><th>الحالة</th><th>السبب</th><th>News</th><th>Execution</th></tr></thead><tbody>${signals.map(s => `<tr><td class="text-xs whitespace-nowrap">${s.created_at ? new Date(s.created_at).toLocaleString('ar') : '—'}</td><td>${escapeHtml(s.source || '—')}</td><td>${statusBadge(s.status)}</td><td class="text-xs">${escapeHtml(s.rejection_reason || (s.status === 'rejected' ? 'Unknown execution state' : '—'))}</td><td>${escapeHtml(s.news_status || '—')}</td><td>${s.trade_id ? 'trade record' : '—'}</td></tr>`).join('')}</tbody></table></div>` : empty('No signals yet')}</div>`;
     const trades = data.trades || [];
@@ -404,7 +433,7 @@
     if (!data.has_data) { el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">REAL DATA ONLY</div><h1 class="page-heading-title">Smart Analytics</h1></div></div><div class="card">${empty(data.message || 'No analytics data')}</div>`; return; }
     const m = data.metrics || {};
     const cards = [['Signals', m.total_signals], ['Accepted', m.accepted_signals], ['Rejected', m.rejected_signals], ['Executed', m.executed_trades], ['Win rate', m.win_rate == null ? null : `${m.win_rate}%`], ['Total P/L', m.total_pnl]];
-    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">PERSISTED DECISIONS</div><h1 class="page-heading-title">Smart Analytics</h1><p class="page-heading-sub">Calculated from your authorized persisted signals and trades only.</p></div></div><div class="grid grid-cols-2 lg:grid-cols-6 gap-3">${cards.map(([k,v]) => `<div class="card"><div class="card-title">${k}</div><div class="card-value text-base">${v == null ? 'Unavailable' : escapeHtml(v)}</div></div>`).join('')}</div><div class="grid md:grid-cols-2 gap-4 mt-4"><div class="card"><div class="card-title">Rejection categories</div>${Object.entries(data.rejection_categories || {}).map(([k,v]) => `<div class="flex justify-between py-2 border-b border-surface-600"><span>${escapeHtml(k)}</span><strong>${v}</strong></div>`).join('') || '<div class="empty-inline">No rejected signals</div>'}</div><div class="card"><div class="card-title">Daily P/L</div>${Object.entries(data.daily_pnl || {}).map(([k,v]) => `<div class="flex justify-between py-2 border-b border-surface-600"><span>${k}</span><strong class="${plClass(v)}">${money(v)}</strong></div>`).join('') || '<div class="empty-inline">No closed results</div>'}</div></div>`;
+    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">PERSISTED DECISIONS</div><h1 class="page-heading-title">Smart Analytics</h1><p class="page-heading-sub">Calculated from your authorized persisted signals and trades only.</p></div></div><div class="grid grid-cols-2 lg:grid-cols-6 gap-3">${cards.map(([k,v]) => `<div class="card"><div class="card-title">${escapeHtml(k)}</div><div class="card-value text-base">${v == null ? 'Unavailable' : escapeHtml(v)}</div></div>`).join('')}</div><div class="grid md:grid-cols-2 gap-4 mt-4"><div class="card"><div class="card-title">Rejection categories</div>${Object.entries(data.rejection_categories || {}).map(([k,v]) => `<div class="flex justify-between py-2 border-b border-surface-600"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></div>`).join('') || '<div class="empty-inline">No rejected signals</div>'}</div><div class="card"><div class="card-title">Daily P/L</div>${Object.entries(data.daily_pnl || {}).map(([k,v]) => `<div class="flex justify-between py-2 border-b border-surface-600"><span>${escapeHtml(k)}</span><strong class="${plClass(v)}">${money(v)}</strong></div>`).join('') || '<div class="empty-inline">No closed results</div>'}</div></div>`;
   }
 
   async function renderProtection(el) {
@@ -424,14 +453,14 @@
 
   function stateBadge(label, state) {
     const tone = stateTone(state);
-    return `<div class="premium-status ${tone}"><div class="status-label">${label}</div><div class="status-value">${state}</div></div>`;
+    return `<div class="premium-status ${tone}"><div class="status-label">${escapeHtml(label)}</div><div class="status-value">${escapeHtml(state)}</div></div>`;
   }
 
   async function renderNews(el) {
     const data = await api('/api/news/status');
     const state = data.status === 'inactive' ? 'SAFE' : data.status === 'active' ? 'PROTECTED' : data.status === 'stale' ? 'STALE DATA' : data.status === 'unavailable' ? 'DATA UNAVAILABLE' : 'CONFIGURATION REQUIRED';
     const explanation = state === 'SAFE' ? 'No high-impact events are currently affecting your symbols.' : state === 'PROTECTED' ? 'Trading is temporarily paused because of a high-impact economic event.' : 'Market-event data is unavailable or stale. New trades remain blocked until fresh data is available.';
-    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">SAFETY LAYER</div><h1 class="page-heading-title">News Protection</h1><p class="page-heading-sub">The backend decides whether a new signal may proceed.</p></div>${stateBadge('Current state', state)}</div><div class="grid md:grid-cols-2 gap-4"><div class="card"><div class="card-title">Protection status</div><div class="text-xl font-bold ${state === 'SAFE' ? 'text-profit' : 'text-amber-300'}">${state}</div><p class="card-sub mt-2">${explanation}</p></div><div class="card"><div class="card-title">Provider evidence</div><div class="text-white">${data.provider || 'Unavailable'}</div><div class="card-sub mt-2">${data.last_update ? `Last update: ${new Date(data.last_update).toLocaleString()}` : 'Freshness unavailable'}</div><div class="mt-3">${data.blocks_new_trades ? '<span class="badge badge-yellow">New trades blocked</span>' : '<span class="badge badge-green">No protection block reported</span>'}</div></div></div>`;
+    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">SAFETY LAYER</div><h1 class="page-heading-title">News Protection</h1><p class="page-heading-sub">The backend decides whether a new signal may proceed.</p></div>${stateBadge('Current state', state)}</div><div class="grid md:grid-cols-2 gap-4"><div class="card"><div class="card-title">Protection status</div><div class="text-xl font-bold ${state === 'SAFE' ? 'text-profit' : 'text-amber-300'}">${state}</div><p class="card-sub mt-2">${explanation}</p></div><div class="card"><div class="card-title">Provider evidence</div><div class="text-white">${escapeHtml(data.provider || 'Unavailable')}</div><div class="card-sub mt-2">${data.last_update ? `Last update: ${new Date(data.last_update).toLocaleString()}` : 'Freshness unavailable'}</div><div class="mt-3">${data.blocks_new_trades ? '<span class="badge badge-yellow">New trades blocked</span>' : '<span class="badge badge-green">No protection block reported</span>'}</div></div></div>`;
   }
 
   async function renderSubscription(el) {
@@ -442,7 +471,7 @@
     const tone = sub.available ? 'good' : 'bad';
     const features = Object.entries(sub.features || {}).filter(([, value]) => value != null);
     const canStartTrial = trial.status === 'NOT_STARTED';
-    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">ACCESS CONTROL</div><h1 class="page-heading-title">Subscription & Trial</h1><p class="page-heading-sub">Access is enforced by the backend for every signal.</p></div><div class="premium-status ${tone}"><div class="status-label">Status</div><div class="status-value">${state}</div></div></div><div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4"><div class="card"><div class="card-title">Current plan</div><div class="card-value text-xl">${sub.plan || 'Unavailable'}</div><div class="card-sub">${sub.expiry ? `Until ${new Date(sub.expiry).toLocaleDateString()}` : 'Expiry unavailable'}</div></div><div class="card"><div class="card-title">Trial</div><div class="text-white font-semibold">${trial.active ? 'Active' : trial.ends_at ? 'Expired' : 'Not started'}</div><div class="card-sub">${trial.active ? `${trial.remaining_days} days remaining` : trial.ends_at ? 'Trial cannot be restarted.' : 'One server-authorized trial is available when eligible.'}</div>${canStartTrial ? '<button id="start-trial" class="mt-3 px-3 py-2 rounded-xl bg-accent-500 text-white text-sm">Start 3-day trial</button>' : ''}</div><div class="card"><div class="card-title">Usage</div><div class="text-white font-semibold">${sub.trades_today ?? '—'} / ${sub.trade_limit ?? '—'}</div><div class="card-sub">Trades today / configured limit</div></div></div><div class="card mt-4"><div class="card-title">Feature access</div>${features.length ? `<div class="feature-list">${features.map(([key, value]) => `<div><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>` : '<div class="empty-inline">Feature entitlements unavailable.</div>'}</div>`;
+    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">ACCESS CONTROL</div><h1 class="page-heading-title">Subscription & Trial</h1><p class="page-heading-sub">Access is enforced by the backend for every signal.</p></div><div class="premium-status ${tone}"><div class="status-label">Status</div><div class="status-value">${escapeHtml(state)}</div></div></div><div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4"><div class="card"><div class="card-title">Current plan</div><div class="card-value text-xl">${escapeHtml(sub.plan || 'Unavailable')}</div><div class="card-sub">${sub.expiry ? `Until ${new Date(sub.expiry).toLocaleDateString()}` : 'Expiry unavailable'}</div></div><div class="card"><div class="card-title">Trial</div><div class="text-white font-semibold">${trial.active ? 'Active' : trial.ends_at ? 'Expired' : 'Not started'}</div><div class="card-sub">${trial.active ? `${escapeHtml(trial.remaining_days)} days remaining` : trial.ends_at ? 'Trial cannot be restarted.' : 'One server-authorized trial is available when eligible.'}</div>${canStartTrial ? '<button id="start-trial" class="mt-3 px-3 py-2 rounded-xl bg-accent-500 text-white text-sm">Start 3-day trial</button>' : ''}</div><div class="card"><div class="card-title">Usage</div><div class="text-white font-semibold">${escapeHtml(sub.trades_today ?? '—')} / ${escapeHtml(sub.trade_limit ?? '—')}</div><div class="card-sub">Trades today / configured limit</div></div></div><div class="card mt-4"><div class="card-title">Feature access</div>${features.length ? `<div class="feature-list">${features.map(([key, value]) => `<div><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>` : '<div class="empty-inline">Feature entitlements unavailable.</div>'}</div>`;
     const trialButton = document.getElementById('start-trial');
     if (trialButton) trialButton.onclick = async () => {
       trialButton.disabled = true;
@@ -471,7 +500,7 @@
     const step = (data.onboarding?.steps || []).find(item => item.key === 'signal_source');
     const configured = Boolean(step?.complete);
     const state = configured ? 'CONFIGURED' : 'NOT CONFIGURED';
-    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">SIGNAL INTAKE</div><h1 class="page-heading-title">TradingView</h1><p class="page-heading-sub">Authenticated webhook intake only. Execution still passes through the shared safeguards.</p></div><div class="premium-status ${configured ? 'good' : 'warn'}"><div class="status-label">Webhook readiness</div><div class="status-value">${state}</div></div></div><div class="grid md:grid-cols-2 gap-4"><div class="card"><div class="card-title">Configuration</div><div class="text-xl font-bold">${state}</div><p class="card-sub mt-2">${configured ? 'Authentication configuration is present. The secret is never displayed.' : 'TradingView is not configured yet.'}</p></div><div class="card"><div class="card-title">Processing path</div><div class="flow-compact"><span>Authenticate</span><span>Validate</span><span>Replay / duplicate</span><span>Subscription</span><span>Risk + News</span><span>SignalPipeline</span><span>TradeExecutor</span></div></div></div><div class="card mt-4"><div class="card-title">Next step</div><p class="text-slate-300">${configured ? 'Send a valid signal and review its decision in Signal Center.' : 'Configure the TradingView webhook through the trusted server configuration. Do not place secrets in this page.'}</p><a href="#signals" class="inline-flex mt-4 px-4 py-2 rounded-xl bg-accent-500 text-white text-sm">Open Signal Center</a></div>`;
+    el.innerHTML = `<div class="page-heading"><div><div class="eyebrow">SIGNAL INTAKE</div><h1 class="page-heading-title">TradingView</h1><p class="page-heading-sub">Authenticated webhook intake only. Execution still passes through the shared safeguards.</p></div><div class="premium-status ${configured ? 'good' : 'warn'}"><div class="status-label">Webhook readiness</div><div class="status-value">${escapeHtml(state)}</div></div></div><div class="grid md:grid-cols-2 gap-4"><div class="card"><div class="card-title">Configuration</div><div class="text-xl font-bold">${state}</div><p class="card-sub mt-2">${configured ? 'Authentication configuration is present. The secret is never displayed.' : 'TradingView is not configured yet.'}</p></div><div class="card"><div class="card-title">Processing path</div><div class="flow-compact"><span>Authenticate</span><span>Validate</span><span>Replay / duplicate</span><span>Subscription</span><span>Risk + News</span><span>SignalPipeline</span><span>TradeExecutor</span></div></div></div><div class="card mt-4"><div class="card-title">Next step</div><p class="text-slate-300">${configured ? 'Send a valid signal and review its decision in Signal Center.' : 'Configure the TradingView webhook through the trusted server configuration. Do not place secrets in this page.'}</p><a href="#signals" class="inline-flex mt-4 px-4 py-2 rounded-xl bg-accent-500 text-white text-sm">Open Signal Center</a></div>`;
   }
 
   async function renderMT5(el) {
@@ -484,12 +513,12 @@
         <span class="w-2.5 h-2.5 rounded-full ${data.connected ? 'bg-profit' : 'bg-loss'}"></span>
         <span class="text-lg font-semibold ${data.connected ? 'text-profit' : 'text-loss'}">${data.connected ? 'متصل' : 'غير متصل'}</span>
       </div>
-      <div class="card-sub mt-2">${data.message || ''}</div>
+      <div class="card-sub mt-2">${escapeHtml(data.message || '')}</div>
       ${data.dry_run ? '<div class="mt-3"><span class="badge badge-yellow">DRY RUN — لا أوامر حقيقية</span></div>' : ''}
     </div>`;
     html += `<div class="card space-y-3">
-      <div class="flex justify-between"><span class="text-slate-400 text-sm">الحساب</span><span class="mono text-white">${data.account || '—'}</span></div>
-      <div class="flex justify-between"><span class="text-slate-400 text-sm">الوسيط</span><span class="mono text-white">${data.broker || '—'}</span></div>
+      <div class="flex justify-between"><span class="text-slate-400 text-sm">الحساب</span><span class="mono text-white">${escapeHtml(data.account || '—')}</span></div>
+      <div class="flex justify-between"><span class="text-slate-400 text-sm">الوسيط</span><span class="mono text-white">${escapeHtml(data.broker || '—')}</span></div>
       <div class="flex justify-between"><span class="text-slate-400 text-sm">الرصيد</span><span class="mono text-white">${money(data.balance)}</span></div>
       <div class="flex justify-between"><span class="text-slate-400 text-sm">الأسهم</span><span class="mono text-white">${money(data.equity)}</span></div>
       <div class="flex justify-between"><span class="text-slate-400 text-sm">الهامش</span><span class="mono text-white">${money(data.margin)}</span></div>
@@ -498,7 +527,7 @@
     if (data.errors && data.errors.length) {
       html += `<div class="card border-loss/30 bg-loss/5 mt-4">
         <div class="card-title text-loss">أخطاء الاتصال</div>
-        <ul class="text-sm text-loss/90 space-y-1 mt-2">${data.errors.map(e => `<li>• ${e}</li>`).join('')}</ul>
+        <ul class="text-sm text-loss/90 space-y-1 mt-2">${data.errors.map(e => `<li>• ${escapeHtml(e)}</li>`).join('')}</ul>
       </div>`;
     }
     el.innerHTML = html;
@@ -512,16 +541,16 @@
           <span class="text-slate-400 text-sm">المخاطرة لكل صفقة</span>
           <span class="mono text-xl font-bold text-white">${(data.risk_per_trade * 100).toFixed(2)}%</span>
         </div>
-        <div class="flex justify-between"><span class="text-slate-400 text-sm">أقصى خسارة يومية</span><span class="mono">${data.max_daily_loss ?? '—'}</span></div>
-        <div class="flex justify-between"><span class="text-slate-400 text-sm">أقصى صفقات مفتوحة</span><span class="mono">${data.max_open_trades ?? '—'}</span></div>
-        <div class="flex justify-between"><span class="text-slate-400 text-sm">أقصى سبريد</span><span class="mono">${data.max_spread ?? '—'}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 text-sm">أقصى خسارة يومية</span><span class="mono">${escapeHtml(data.max_daily_loss ?? '—')}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 text-sm">أقصى صفقات مفتوحة</span><span class="mono">${escapeHtml(data.max_open_trades ?? '—')}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 text-sm">أقصى سبريد</span><span class="mono">${escapeHtml(data.max_spread ?? '—')}</span></div>
         <div class="pt-2">${data.dry_run ? '<span class="badge badge-yellow">DRY RUN نشط</span>' : '<span class="badge badge-green">Live</span>'}</div>
       </div>
       <div class="card">
         <div class="card-title">الرموز المسموحة</div>
-        <div class="text-sm text-slate-300 mt-2">${(data.allowed_symbols && data.allowed_symbols.length) ? data.allowed_symbols.join(', ') : 'الكل'}</div>
+        <div class="text-sm text-slate-300 mt-2">${(data.allowed_symbols && data.allowed_symbols.length) ? escapeHtml(data.allowed_symbols.join(', ')) : 'الكل'}</div>
         <div class="card-title mt-4">الرموز المحظورة</div>
-        <div class="text-sm text-slate-300 mt-2">${(data.blocked_symbols && data.blocked_symbols.length) ? data.blocked_symbols.join(', ') : 'لا يوجد'}</div>
+        <div class="text-sm text-slate-300 mt-2">${(data.blocked_symbols && data.blocked_symbols.length) ? escapeHtml(data.blocked_symbols.join(', ')) : 'لا يوجد'}</div>
       </div>
     </div>`;
   }
@@ -533,9 +562,9 @@
         api('/api/admin/plans'), api('/api/admin/announcements'),
       ]);
       let html = `<div class="page-heading"><div><div class="eyebrow">ADMIN COMMAND CENTER</div><h1 class="page-heading-title">Operations & Access</h1><p class="page-heading-sub">Server-authorized monitoring. No credentials or broker actions are exposed here.</p></div><span class="badge badge-yellow">${health.dry_run ? 'DRY RUN' : 'LIVE BLOCKED BY POLICY'}</span></div>`;
-      html += `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6"><div class="card"><div class="card-title">Users</div><div class="card-value">${health.users_total}</div><div class="card-sub">${health.users_active} active</div></div><div class="card"><div class="card-title">Trades</div><div class="card-value">${health.trades_total}</div></div><div class="card"><div class="card-title">Signals</div><div class="card-value">${health.signals_total}</div></div><div class="card"><div class="card-title">Execution mode</div><div class="card-value text-sm">${health.dry_run ? 'DRY RUN' : 'Unavailable'}</div></div></div>`;
+      html += `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6"><div class="card"><div class="card-title">Users</div><div class="card-value">${escapeHtml(health.users_total)}</div><div class="card-sub">${escapeHtml(health.users_active)} active</div></div><div class="card"><div class="card-title">Trades</div><div class="card-value">${escapeHtml(health.trades_total)}</div></div><div class="card"><div class="card-title">Signals</div><div class="card-value">${escapeHtml(health.signals_total)}</div></div><div class="card"><div class="card-title">Execution mode</div><div class="card-value text-sm">${health.dry_run ? 'DRY RUN' : 'Unavailable'}</div></div></div>`;
       html += `<div class="card !p-0 overflow-hidden mb-4"><div class="px-4 py-3 border-b border-surface-600"><span class="text-sm font-semibold text-white">Users & readiness</span></div><div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>ID</th><th>Telegram</th><th>Plan</th><th>Trial/MT5</th><th>Status</th></tr></thead><tbody>`;
-      for (const u of users.items || []) html += `<tr><td class="mono">${u.id}</td><td class="mono">${escapeHtml(u.telegram_id)} ${u.username ? '@' + escapeHtml(u.username) : ''}</td><td><span class="badge badge-blue">${escapeHtml(u.subscription_tier)}</span></td><td>${u.has_gateway ? '<span class="text-profit">MT5 ✓</span>' : '<span class="text-slate-500">Not connected</span>'}</td><td>${u.is_banned ? statusBadge('banned') : u.is_active ? statusBadge('executed') : statusBadge('cancelled')}</td></tr>`;
+      for (const u of users.items || []) html += `<tr><td class="mono">${escapeHtml(u.id)}</td><td class="mono">${escapeHtml(u.telegram_id)} ${u.username ? '@' + escapeHtml(u.username) : ''}</td><td><span class="badge badge-blue">${escapeHtml(u.subscription_tier)}</span></td><td>${u.has_gateway ? '<span class="text-profit">MT5 ✓</span>' : '<span class="text-slate-500">Not connected</span>'}</td><td>${u.is_banned ? statusBadge('banned') : u.is_active ? statusBadge('executed') : statusBadge('cancelled')}</td></tr>`;
       html += `</tbody></table></div></div>`;
       html += `<div class="grid lg:grid-cols-2 gap-4"><div class="card"><div class="card-title">Subscription plans</div>${(plans.items || []).length ? `<div class="feature-list">${plans.items.map(plan => `<div><span>${escapeHtml(plan.name)} <small>${escapeHtml(plan.tier)}</small></span><strong>${plan.active ? 'ACTIVE' : 'INACTIVE'}</strong></div>`).join('')}</div>` : '<div class="empty-inline">No plan catalog available.</div>'}</div><div class="card"><div class="card-title">Announcements</div><form id="announcement-form" class="space-y-2"><input id="announcement-title" maxlength="160" placeholder="Title" class="w-full bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 text-sm text-white" required /><textarea id="announcement-message" maxlength="4000" placeholder="Message" class="w-full bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 text-sm text-white" required></textarea><label class="text-xs text-slate-400 flex gap-2 items-center"><input id="announcement-enabled" type="checkbox" /> Enable next daily cycle</label><button class="px-4 py-2 rounded-xl bg-accent-500 text-white text-sm" type="submit">Save announcement</button></form><div class="mt-4 space-y-2">${(announcements.items || []).map(item => `<div class="border border-surface-600 rounded-xl p-3"><div class="text-white text-sm">${escapeHtml(item.title)}</div><div class="text-xs text-slate-400 mt-1">${item.enabled ? 'Enabled' : 'Disabled'} · delivery is restart-safe</div></div>`).join('') || '<div class="empty-inline">No announcements configured.</div>'}</div></div></div>`;
       el.innerHTML = html;
@@ -664,9 +693,12 @@
     try {
       if (_ws && (_ws.readyState === 0 || _ws.readyState === 1)) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const url = proto + '://' + location.host + '/ws?token=' + encodeURIComponent(token);
+      const url = proto + '://' + location.host + '/ws';
       _ws = new WebSocket(url);
-      _ws.onopen = () => { _wsRetry = 0; };
+      _ws.onopen = () => {
+        _wsRetry = 0;
+        _ws.send(JSON.stringify({ type: 'auth', token }));
+      };
       _ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
@@ -701,10 +733,18 @@
 
   async function renderSettings(el) {
     const data = await api('/api/settings');
+    const configuredMinRisk = Number(data.min_risk_factor);
+    const configuredMaxRisk = Number(data.max_risk_factor);
+    const validRiskLimits = Number.isFinite(configuredMinRisk) && configuredMinRisk > 0 &&
+      Number.isFinite(configuredMaxRisk) && configuredMaxRisk >= configuredMinRisk;
+    const minRisk = validRiskLimits ? configuredMinRisk : 0.001;
+    const maxRisk = validRiskLimits ? configuredMaxRisk : 0.05;
+    const configuredRisk = Number(data.default_risk_factor);
+    const currentRisk = Number.isFinite(configuredRisk) ? configuredRisk : 0.01;
     el.innerHTML = `<div class="card max-w-lg space-y-4">
-      <div class="flex justify-between"><span class="text-slate-400 text-sm">الخطة</span><span class="badge badge-blue">${data.subscription_tier || 'free'}</span></div>
-      <label class="block text-sm"><span class="text-slate-400">المخاطرة الافتراضية (0.001–0.1)</span>
-        <input id="set-risk" type="number" step="0.001" min="0.001" max="0.1" value="${data.default_risk_factor || 0.01}"
+      <div class="flex justify-between"><span class="text-slate-400 text-sm">الخطة</span><span class="badge badge-blue">${escapeHtml(data.subscription_tier || 'free')}</span></div>
+      <label class="block text-sm"><span class="text-slate-400">المخاطرة الافتراضية (${minRisk}–${maxRisk})</span>
+        <input id="set-risk" type="number" step="any" min="${minRisk}" max="${maxRisk}" value="${currentRisk}"
           class="mt-1 w-full bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 text-white mono" />
       </label>
       <label class="block text-sm"><span class="text-slate-400">اللغة</span>
@@ -733,57 +773,57 @@
   }
 
   async function renderSignalDetail(el, id) {
-    const s = await api('/api/signals/' + id);
+    const s = await api('/api/signals/' + encodeURIComponent(id));
     const tps = (s.take_profits || []).join(', ') || '—';
     const timeline = (s.timeline || []).map(item => `
       <li class="flex items-center gap-2 text-sm">
         <span class="w-2 h-2 rounded-full ${item.state === 'complete' || item.state === 'persisted' ? 'bg-profit' : item.state === 'dry_run' || item.state === 'unknown' ? 'bg-amber-400' : 'bg-loss'}"></span>
-        <span>${item.label}</span><span class="text-xs text-slate-500">${item.state || 'unknown'}</span>
+        <span>${escapeHtml(item.label)}</span><span class="text-xs text-slate-500">${escapeHtml(item.state || 'unknown')}</span>
       </li>`).join('');
     el.innerHTML = `
       <div class="mb-3"><a href="#signals" class="text-xs text-accent-glow">← الإشارات</a></div>
       <div class="card max-w-2xl space-y-3">
         <div class="flex justify-between items-center">
-          <span class="text-lg font-semibold text-white mono">${s.symbol || '—'}</span>
+          <span class="text-lg font-semibold text-white mono">${escapeHtml(s.symbol || '—')}</span>
           ${statusBadge(s.status)}
         </div>
         <div class="grid grid-cols-2 gap-3 text-sm">
-          <div><span class="text-slate-400">الاتجاه</span><div class="text-white">${s.direction || '—'}</div></div>
-          <div><span class="text-slate-400">المصدر</span><div class="text-white">${s.source || '—'}</div></div>
-          <div><span class="text-slate-400">Entry</span><div class="mono">${s.entry || '—'}</div></div>
-          <div><span class="text-slate-400">Stop Loss</span><div class="mono text-loss">${s.stop_loss || '—'}</div></div>
-          <div class="col-span-2"><span class="text-slate-400">Take Profit</span><div class="mono text-profit">${tps}</div></div>
-          <div class="col-span-2"><span class="text-slate-400">الوقت</span><div class="mono text-xs">${s.created_at || '—'}</div></div>
+          <div><span class="text-slate-400">الاتجاه</span><div class="text-white">${escapeHtml(s.direction || '—')}</div></div>
+          <div><span class="text-slate-400">المصدر</span><div class="text-white">${escapeHtml(s.source || '—')}</div></div>
+          <div><span class="text-slate-400">Entry</span><div class="mono">${escapeHtml(s.entry || '—')}</div></div>
+          <div><span class="text-slate-400">Stop Loss</span><div class="mono text-loss">${escapeHtml(s.stop_loss || '—')}</div></div>
+          <div class="col-span-2"><span class="text-slate-400">Take Profit</span><div class="mono text-profit">${escapeHtml(tps)}</div></div>
+          <div class="col-span-2"><span class="text-slate-400">الوقت</span><div class="mono text-xs">${escapeHtml(s.created_at || '—')}</div></div>
         </div>
-        ${s.decision ? `<div class="why-card"><div class="card-title">Why didn't Tonpo trade?</div><div class="text-white font-semibold">${s.decision.title}</div><div class="card-sub mt-1">${s.decision.explanation}</div><div class="card-sub mt-1">${s.created_at || '—'} · ${s.status || '—'}</div></div>` : (s.rejection_reason ? `<div class="why-card"><div class="card-title">Why didn't Tonpo trade?</div><div class="text-white">${s.rejection_reason}</div></div>` : '')}
-        ${s.news_status ? `<div class="text-xs text-slate-400">حالة الأخبار: ${s.news_status}</div>` : ''}
+        ${s.decision ? `<div class="why-card"><div class="card-title">Why didn't Tonpo trade?</div><div class="text-white font-semibold">${escapeHtml(s.decision.title)}</div><div class="card-sub mt-1">${escapeHtml(s.decision.explanation)}</div><div class="card-sub mt-1">${escapeHtml(s.created_at || '—')} · ${escapeHtml(s.status || '—')}</div></div>` : (s.rejection_reason ? `<div class="why-card"><div class="card-title">Why didn't Tonpo trade?</div><div class="text-white">${escapeHtml(s.rejection_reason)}</div></div>` : '')}
+        ${s.news_status ? `<div class="text-xs text-slate-400">حالة الأخبار: ${escapeHtml(s.news_status)}</div>` : ''}
         ${s.reconciliation_required ? '<div class="why-card border-warn/40"><div class="card-title">Manual reconciliation required</div><div class="card-sub">Broker outcome is unknown. Tonpo will not retry this signal automatically. Verify the broker state before any manual action.</div></div>' : ''}
-        <pre class="text-xs bg-surface-900 p-3 rounded-lg overflow-x-auto text-slate-300 whitespace-pre-wrap">${(s.signal_text || '').replace(/</g,'&lt;')}</pre>
+        <pre class="text-xs bg-surface-900 p-3 rounded-lg overflow-x-auto text-slate-300 whitespace-pre-wrap">${escapeHtml(s.signal_text || '')}</pre>
         <div class="border-t border-surface-600 pt-3"><div class="text-sm font-semibold text-white mb-2">Signal timeline</div><ul class="space-y-2">${timeline || '<li class="text-sm text-slate-500">No persisted timeline events</li>'}</ul></div>
         <p class="text-xs text-slate-500">التنفيذ يبدأ فقط من مصدر الإشارة المعتمد ويمر عبر التحقق والاشتراك والمخاطر والـpipeline. هذه الشاشة للمتابعة فقط.</p>
       </div>`;
   }
 
   async function renderTradeDetail(el, id) {
-    const t = await api('/api/trades/' + id);
+    const t = await api('/api/trades/' + encodeURIComponent(id));
     const timeline = (t.timeline || []).map(item => `
       <li class="flex items-center gap-2 text-sm">
         <span class="w-2 h-2 rounded-full ${item.state === 'complete' || item.state === 'dry_run' ? 'bg-profit' : item.state === 'failed' || item.state === 'rejected' ? 'bg-loss' : 'bg-slate-500'}"></span>
-        <span>${item.label}</span><span class="text-xs text-slate-500">${item.state || 'unknown'}</span>
+        <span>${escapeHtml(item.label)}</span><span class="text-xs text-slate-500">${escapeHtml(item.state || 'unknown')}</span>
       </li>`).join('');
     el.innerHTML = `
       <div class="mb-3"><a href="#trades" class="text-xs text-accent-glow">← الصفقات</a></div>
       <div class="card max-w-2xl space-y-3">
-        <div class="flex justify-between"><span class="text-lg font-semibold mono text-white">${t.symbol || '—'}</span>${statusBadge(t.status)}</div>
+        <div class="flex justify-between"><span class="text-lg font-semibold mono text-white">${escapeHtml(t.symbol || '—')}</span>${statusBadge(t.status)}</div>
         <div class="grid grid-cols-2 gap-3 text-sm">
-          <div><span class="text-slate-400">النوع</span><div>${t.order_type || '—'}</div></div>
-          <div><span class="text-slate-400">الحجم</span><div class="mono">${t.volume != null ? t.volume : '—'}</div></div>
-          <div><span class="text-slate-400">Entry</span><div class="mono">${t.entry_price != null ? t.entry_price : '—'}</div></div>
-          <div><span class="text-slate-400">SL</span><div class="mono text-loss">${t.stop_loss != null ? t.stop_loss : '—'}</div></div>
-          <div><span class="text-slate-400">TP</span><div class="mono text-profit">${t.take_profit != null ? t.take_profit : '—'}</div></div>
-          <div><span class="text-slate-400">P/L</span><div class="mono">${t.profit != null ? t.profit : '—'}</div></div>
-          <div><span class="text-slate-400">فتح</span><div class="mono text-xs">${t.created_at || '—'}</div></div>
-          <div><span class="text-slate-400">إغلاق</span><div class="mono text-xs">${t.closed_at || '—'}</div></div>
+          <div><span class="text-slate-400">النوع</span><div>${escapeHtml(t.order_type || '—')}</div></div>
+          <div><span class="text-slate-400">الحجم</span><div class="mono">${escapeHtml(t.volume != null ? t.volume : '—')}</div></div>
+          <div><span class="text-slate-400">Entry</span><div class="mono">${escapeHtml(t.entry_price != null ? t.entry_price : '—')}</div></div>
+          <div><span class="text-slate-400">SL</span><div class="mono text-loss">${escapeHtml(t.stop_loss != null ? t.stop_loss : '—')}</div></div>
+          <div><span class="text-slate-400">TP</span><div class="mono text-profit">${escapeHtml(t.take_profit != null ? t.take_profit : '—')}</div></div>
+          <div><span class="text-slate-400">P/L</span><div class="mono">${escapeHtml(t.profit != null ? t.profit : '—')}</div></div>
+          <div><span class="text-slate-400">فتح</span><div class="mono text-xs">${escapeHtml(t.created_at || '—')}</div></div>
+          <div><span class="text-slate-400">إغلاق</span><div class="mono text-xs">${escapeHtml(t.closed_at || '—')}</div></div>
         </div>
         <div class="border-t border-surface-600 pt-3"><div class="text-sm font-semibold text-white mb-2">Execution timeline</div><ul class="space-y-2">${timeline || '<li class="text-sm text-slate-500">No persisted timeline events</li>'}</ul></div>
         <p class="text-xs text-slate-500">Close/Modify غير متاحين من الويب — استخدم البوت.</p>
@@ -804,8 +844,8 @@
         <div class="card !p-0 overflow-hidden">
           <div class="px-4 py-3 border-b border-surface-600 text-sm font-semibold text-white">تذاكري</div>
           ${items.length ? `<div class="divide-y divide-surface-600">${items.map(t => `
-            <div class="px-4 py-3 text-sm"><div class="text-white">${t.subject}</div>
-            <div class="text-xs text-slate-400 mt-1">${statusBadge(t.status)} · ${t.created_at || ''}</div></div>`).join('')}</div>`
+            <div class="px-4 py-3 text-sm"><div class="text-white">${escapeHtml(t.subject)}</div>
+            <div class="text-xs text-slate-400 mt-1">${statusBadge(t.status)} · ${escapeHtml(t.created_at || '')}</div></div>`).join('')}</div>`
             : '<div class="p-6 text-center text-slate-500 text-sm">لا توجد تذاكر</div>'}
         </div>
       </div>`;
@@ -826,7 +866,7 @@
     if (!box) return;
     const div = document.createElement('div');
     div.className = role === 'user' ? 'text-right' : 'text-left';
-    div.innerHTML = `<div class="inline-block max-w-[90%] rounded-xl px-3 py-2 text-sm ${role==='user'?'bg-accent-500 text-white':'bg-surface-700 text-slate-200'}" style="white-space:pre-wrap">${String(text).replace(/</g,'&lt;')}</div>`;
+    div.innerHTML = `<div class="inline-block max-w-[90%] rounded-xl px-3 py-2 text-sm ${role==='user'?'bg-accent-500 text-white':'bg-surface-700 text-slate-200'}" style="white-space:pre-wrap">${escapeHtml(text)}</div>`;
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
   }
@@ -836,9 +876,9 @@
     const wrap = document.getElementById('ai-quick');
     if (!wrap) return;
     try {
-      const data = await api('/api/assistant/quick-actions?language=' + lang);
+      const data = await api('/api/assistant/quick-actions?language=' + encodeURIComponent(lang));
       wrap.innerHTML = (data.actions || []).map(a =>
-        `<button type="button" class="ai-q text-xs px-2 py-1 rounded-lg bg-surface-700 text-slate-300 hover:bg-surface-600 border border-surface-600">${String(a).replace(/</g,'&lt;')}</button>`
+        `<button type="button" class="ai-q text-xs px-2 py-1 rounded-lg bg-surface-700 text-slate-300 hover:bg-surface-600 border border-surface-600">${escapeHtml(a)}</button>`
       ).join('');
       wrap.querySelectorAll('.ai-q').forEach(btn => {
         btn.onclick = () => { document.getElementById('ai-input').value = btn.textContent; document.getElementById('ai-form').requestSubmit(); };

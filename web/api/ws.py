@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
@@ -21,6 +21,7 @@ from services.auth import AuthService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
+MAX_WEBSOCKET_MESSAGE_BYTES = 8192
 
 # Active connections: user_id -> set of websockets
 _connections: Dict[int, Set[WebSocket]] = {}
@@ -74,7 +75,7 @@ def _snapshot(db: Session, user: User) -> Dict[str, Any]:
     )
     return {
         "type": "snapshot",
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "dry_run": dry,
         "user_id": user.id,
         "has_gateway": bool(user.has_gateway_credentials),
@@ -107,7 +108,9 @@ def _snapshot(db: Session, user: User) -> Dict[str, Any]:
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
-    Connect with ?token=<JWT> or first message {"type":"auth","token":"..."}.
+    Preferred auth is the first message {"type":"auth","token":"..."}.
+    ?token=<JWT> remains temporarily supported for older clients; new clients must
+    not put bearer credentials in the URL, where proxies may log them.
     User isolation is enforced: only that user's data is pushed.
     """
     await websocket.accept()
@@ -115,21 +118,24 @@ async def websocket_endpoint(websocket: WebSocket):
     db: Optional[Session] = None
 
     try:
-        # Prefer query param token
+        # Legacy compatibility only. New clients authenticate in the first frame.
         token = websocket.query_params.get("token")
         if not getattr(db_manager, "_initialized", False):
             db_manager.initialize(getattr(settings, "DATABASE_URL", None))
         db = db_manager.get_session()
 
-        if token:
+        if token and len(token.encode("utf-8")) <= MAX_WEBSOCKET_MESSAGE_BYTES:
             user = _auth_user(token, db)
 
         if user is None:
             # Wait briefly for auth message
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+                if len(raw.encode("utf-8")) > MAX_WEBSOCKET_MESSAGE_BYTES:
+                    await websocket.close(code=status.WS_1009_MESSAGE_TOO_BIG)
+                    return
                 msg = json.loads(raw)
-                if msg.get("type") == "auth":
+                if isinstance(msg, dict) and msg.get("type") == "auth":
                     user = _auth_user(msg.get("token"), db)
             except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
                 user = None
@@ -147,12 +153,20 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=25.0)
+                if len(raw.encode("utf-8")) > MAX_WEBSOCKET_MESSAGE_BYTES:
+                    await websocket.close(code=status.WS_1009_MESSAGE_TOO_BIG)
+                    break
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(msg, dict):
+                    continue
                 if msg.get("type") == "ping":
-                    await websocket.send_json({"type": "pong", "ts": datetime.utcnow().isoformat() + "Z"})
+                    await websocket.send_json({
+                        "type": "pong",
+                        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    })
                 elif msg.get("type") == "refresh":
                     db.expire_all()
                     await websocket.send_json(_snapshot(db, user))

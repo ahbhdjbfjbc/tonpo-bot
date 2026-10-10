@@ -12,12 +12,13 @@ from config.settings import settings
 from database.models import User
 from web.deps import get_current_user, get_db
 from services.subscription import SubscriptionService
+from services.risk_limits import get_risk_limits, validate_risk_factor
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 class SettingsUpdate(BaseModel):
-    default_risk_factor: Optional[float] = Field(None, ge=0.001, le=0.1)
+    default_risk_factor: Optional[float] = Field(None, gt=0, le=1)
     language: Optional[str] = None
     notifications_enabled: Optional[bool] = None
     allowed_symbols: Optional[List[str]] = None
@@ -28,8 +29,11 @@ class SettingsUpdate(BaseModel):
 @router.get("/")
 def get_settings(user: User = Depends(get_current_user)):
     us = user.settings
+    min_risk_factor, max_risk_factor, _default_risk_factor = get_risk_limits()
     return {
         "default_risk_factor": user.default_risk_factor,
+        "min_risk_factor": min_risk_factor,
+        "max_risk_factor": max_risk_factor,
         "language": getattr(user, "language", "ar"),
         "subscription_tier": user.subscription_tier,
         "allowed_symbols": user.allowed_symbols,
@@ -50,7 +54,10 @@ def update_settings(
     db: Session = Depends(get_db),
 ):
     if body.default_risk_factor is not None:
-        user.default_risk_factor = body.default_risk_factor
+        try:
+            user.default_risk_factor = validate_risk_factor(body.default_risk_factor)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Risk factor is outside configured limits") from exc
     if body.language is not None:
         if hasattr(user, "language"):
             user.language = body.language

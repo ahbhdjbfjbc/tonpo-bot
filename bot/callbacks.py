@@ -299,6 +299,15 @@ class CallbackHandlers:
                 await query.edit_message_text("❌ تعذر تنفيذ الإجراء. يرجى المحاولة لاحقًا.")
         
         elif action == 'close_all':
+            db_user = self.user_repo.get_by_telegram_id(update.effective_user.id)
+            if (not db_user or not db_user.is_verified or not db_user.is_active
+                    or db_user.is_banned):
+                await query.edit_message_text("❌ الحساب غير مصرح له بهذا الإجراء.")
+                return
+            if not db_user.has_gateway_credentials or not self.execution_provider:
+                await query.edit_message_text("❌ الحساب غير متصل. استخدم /register أولًا.")
+                return
+
             # Close all positions
             from bot.keyboards import get_confirmation_keyboard
             
@@ -364,13 +373,14 @@ class CallbackHandlers:
                 await query.edit_message_text("❌ التداول معطل في وضع المحاكاة.")
                 return
             # Close all positions
-            from services.trade_executor import TradeExecutor
-            executor = TradeExecutor(self.db, self.bot, execution_provider=self.execution_provider)
-            
             # Get all positions
             try:
                 db_user = self.user_repo.get_by_telegram_id(update.effective_user.id)
-                if not db_user or not db_user.has_gateway_credentials:
+                if (not db_user or not db_user.is_verified or not db_user.is_active
+                        or db_user.is_banned):
+                    await query.edit_message_text("❌ الحساب غير مصرح له بهذا الإجراء.")
+                    return
+                if not db_user.has_gateway_credentials:
                     await query.edit_message_text("❌ الحساب غير متصل. استخدم /register أولًا.")
                     return
                 

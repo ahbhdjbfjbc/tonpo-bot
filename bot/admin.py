@@ -65,44 +65,12 @@ class AdminHandler:
         return self.has_permission(user_id, "users.view")
 
     def role_for(self, user_id: int) -> str:
-        if user_id in self.admin_ids:
-            return "SUPER_ADMIN"
-        # Fail closed when session was never bound (e.g. partial construction).
-        if getattr(self, "db", None) is None:
-            return ""
-        try:
-            assignment = self.db.query(AdminRole).filter_by(
-                telegram_id=user_id, is_active=True
-            ).first()
-            return assignment.role if assignment else ""
-        except Exception:
-            try:
-                self.db.rollback()
-            except Exception:
-                pass
-            return ""
+        # Temporary explicit allowlist policy: database roles are not trusted
+        # until their permission mapping is reviewed and deployed.
+        return "SUPER_ADMIN" if user_id in set(self.admin_ids or []) else ""
 
     def has_permission(self, user_id: int, permission: str) -> bool:
-        role = self.role_for(user_id)
-        if not role:
-            return False
-        if role == "SUPER_ADMIN":
-            return True
-        if getattr(self, "db", None) is None:
-            return False
-        try:
-            assignment = self.db.query(AdminRole).filter_by(
-                telegram_id=user_id, is_active=True
-            ).first()
-            explicit = set(assignment.permissions or []) if assignment else set()
-        except Exception:
-            try:
-                self.db.rollback()
-            except Exception:
-                pass
-            explicit = set()
-        permissions = explicit or ROLE_PERMISSIONS.get(role, set())
-        return "*" in permissions or permission in permissions
+        return user_id in set(self.admin_ids or [])
 
     def record_audit(self, admin_id: int, action: str, *, target_type=None,
                      target_id=None, old_value=None, new_value=None,

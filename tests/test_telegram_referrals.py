@@ -204,10 +204,20 @@ def test_command_menu_wiring_keeps_registration_gates_only_on_account_commands(m
                 return await callback(*args, **kwargs)
 
             wrapped.requires_registration = True
+            wrapped.protected_callback = callback
             return wrapped
 
         def wrap_admin(self, callback):
             return callback
+
+    class FakeRateLimiter:
+        def wrap(self, action):
+            def decorate(callback):
+                async def wrapped(*args, **kwargs):
+                    return await callback(*args, **kwargs)
+                wrapped.rate_limit_action = action
+                return wrapped
+            return decorate
 
     monkeypatch.setattr(bot_main, "CommandHandler", FakeHandler)
     monkeypatch.setattr(bot_main, "ConversationHandler", FakeConversation)
@@ -237,6 +247,7 @@ def test_command_menu_wiring_keeps_registration_gates_only_on_account_commands(m
         open_support_ticket=stub,
     )
     bot.auth_middleware = FakeAuth()
+    bot.rate_limiter = FakeRateLimiter()
     bot._setup_handlers()
 
     commands = {
@@ -248,6 +259,8 @@ def test_command_menu_wiring_keeps_registration_gates_only_on_account_commands(m
     assert not getattr(commands["profile"].callback, "requires_registration", False)
     assert not getattr(commands["upgrade"].callback, "requires_registration", False)
     assert not getattr(commands["referral"].callback, "requires_registration", False)
+    assert getattr(commands["positions"].callback, "requires_registration", False)
+    assert commands["positions"].callback.protected_callback.rate_limit_action == "positions"
     assert commands["balance"].callback.requires_registration
     assert commands["positions"].callback.requires_registration
     assert commands["history"].callback.requires_registration

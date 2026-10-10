@@ -164,3 +164,37 @@ def test_pipeline_emergency_stop_blocks_execution_without_bypassing_dry_run(monk
     finally:
         db.close()
         engine.dispose()
+
+
+def test_pipeline_rejects_stale_and_future_signals_before_creating_receipt(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from services import signal_pipeline
+
+    monkeypatch.setattr(signal_pipeline.settings, 'MAX_SIGNAL_AGE_SECONDS', 300, raising=False)
+    monkeypatch.setattr(signal_pipeline.settings, 'MAX_FUTURE_SIGNAL_SKEW_SECONDS', 30, raising=False)
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        UserRepository(db).create_user(telegram_id=98765, is_verified=True)
+
+        class Executor:
+            async def execute_trade(self, *_args, **_kwargs):
+                raise AssertionError('stale/future signals must not reach execution')
+
+        now = datetime.now(timezone.utc)
+        pipeline = SignalPipeline(db, Executor())
+        base = dict(source='manual', user_id=98765,
+                    payload='BUY EURUSD\nEntry 1.0800\nSL 1.0700\nTP1 1.0900')
+        stale = UnifiedSignal(**base, received_at=now - timedelta(minutes=10))
+        future = UnifiedSignal(**base, received_at=now + timedelta(minutes=5))
+
+        stale_result = asyncio.run(pipeline.process(stale, confirmed=True))
+        future_result = asyncio.run(pipeline.process(future, confirmed=True))
+
+        assert stale_result['status'] == 'stale_signal'
+        assert future_result['status'] == 'future_signal'
+        assert db.query(SignalReceipt).count() == 0
+    finally:
+        db.close()
+        engine.dispose()

@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from config.settings import settings
 from core.models import UnifiedSignal
 from database.database import Base
-from database.models import SubscriptionPlan, Trade, UserSettings
+from database.models import SubscriptionPlan, Trade, User, UserSettings
 from database.repositories import UserRepository
 from services.signal_pipeline import SignalPipeline
 from services.trade_executor import TradeExecutor
@@ -186,5 +186,63 @@ def test_missing_equity_or_positions_fails_closed_before_order(monkeypatch):
         assert result["status"] == "risk_blocked"
         assert result["reason_code"] == "account_snapshot_unavailable"
         assert connection.order_calls == 0
+    finally:
+        db.close(); engine.dispose()
+
+
+def test_verified_demo_execution_reserves_daily_slot_and_updates_success_totals(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_DRY_RUN", False, raising=False)
+    engine, db = _db()
+    try:
+        user = _setup(db)
+        plan = db.query(SubscriptionPlan).filter_by(tier="pro").one()
+        plan.max_trades_per_day = 1
+        db.commit()
+        connection = DemoConnection(balance=10000.0, equity=10000.0, positions=[])
+
+        first = _run(db, connection, "successful-reservation-1")
+        user = db.query(User).filter_by(telegram_id=910001).one()
+
+        assert first["status"] == "executed"
+        assert connection.order_calls == 1
+        assert user.daily_trades == 1
+        assert user.total_trades == 1
+        assert user.total_volume > 0
+
+        second_signal = _signal("successful-reservation-2")
+        second_signal.payload = second_signal.payload.replace('"stop_loss":1.09', '"stop_loss":1.089')
+        executor = TradeExecutor(db, execution_provider=DemoProvider(connection))
+        pipeline = SignalPipeline(db, executor)
+        pipeline.news.assess = lambda symbol: {"status": "inactive", "reason": "no event", "events": []}
+        second = asyncio.run(pipeline.process(second_signal))
+
+        assert second["status"] == "limit_reached"
+        assert connection.order_calls == 1
+        db.refresh(user)
+        assert user.daily_trades == 1
+        assert user.total_trades == 1
+    finally:
+        db.close(); engine.dispose()
+
+
+def test_definitive_broker_rejection_releases_reserved_daily_slot(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_DRY_RUN", False, raising=False)
+    engine, db = _db()
+    try:
+        user = _setup(db)
+
+        class RejectedConnection(DemoConnection):
+            async def create_market_buy_order(self, *args, **kwargs):
+                self.order_calls += 1
+                return {"success": False, "status": "rejected", "error": "demo rejection"}
+
+        connection = RejectedConnection(balance=10000.0, equity=10000.0, positions=[])
+        result = _run(db, connection, "definitive-rejection")
+        user = UserRepository(db).get_by_telegram_id(910001)
+
+        assert result["status"] == "failed"
+        assert connection.order_calls == 1
+        assert user.daily_trades == 0
+        assert user.total_trades == 0
     finally:
         db.close(); engine.dispose()

@@ -27,7 +27,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.exc import IntegrityError
 
 from config.settings import settings
-from database.models import PaymentRequest as DatabasePaymentRequest, User, AdminRole, AdminAuditLog
+from database.models import PaymentRequest as DatabasePaymentRequest, User, AdminAuditLog
 from database.repositories import UserRepository
 
 Base = declarative_base()
@@ -606,17 +606,9 @@ class PaymentService:
         }
 
     def _admin_role(self, admin_id: int) -> str | None:
-        """Return an authorized payment-review role, or None."""
+        """Return the temporary allowlist role; database AdminRole is not trusted."""
         if admin_id in set(getattr(settings, "ADMIN_USER_IDS", []) or []):
             return "SUPER_ADMIN"
-        role = self.db.query(AdminRole).filter(
-            AdminRole.telegram_id == admin_id, AdminRole.is_active == True  # noqa: E712
-        ).first()
-        if not role:
-            return None
-        permissions = set(role.permissions or [])
-        if role.role in {"ADMIN", "SUPER_ADMIN"} or "*" in permissions or "subscriptions.manage" in permissions:
-            return role.role
         return None
 
     def _require_payment_admin(self, admin_id: int) -> str:

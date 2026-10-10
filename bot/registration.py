@@ -1,5 +1,6 @@
 # fx/bot/registration.py
 import logging
+import time
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import ConversationHandler, CallbackContext, MessageHandler, filters, CallbackQueryHandler
@@ -13,6 +14,7 @@ from services.notification import NotificationService
 from core.validators import CredentialsValidator
 #from gateway_client import ExecutionProvider, GatewayConfig
 from config.settings import settings
+from services.risk_limits import parse_risk_percent, risk_limits_percent
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,23 @@ class RegistrationHandler:
         
         # Initialize execution provider
         self.execution_provider = None  # injected by main.py after startup
+
+    def purge_expired_pending_passwords(self) -> int:
+        """Drop plaintext passwords after their short in-memory TTL."""
+        ttl = int(getattr(settings, "REGISTRATION_PASSWORD_TTL_SECONDS", 300))
+        now = time.monotonic()
+        expired = [
+            user_id for user_id, entry in self._pending_passwords.items()
+            if not isinstance(entry, tuple) or len(entry) != 2 or now - entry[1] >= ttl
+        ]
+        for user_id in expired:
+            self._pending_passwords.pop(user_id, None)
+        return len(expired)
+
+    def _get_pending_password(self, user_id: int):
+        self.purge_expired_pending_passwords()
+        entry = self._pending_passwords.get(user_id)
+        return entry[0] if isinstance(entry, tuple) and len(entry) == 2 else None
     
     async def initialize(self):
         """Initialize the execution provider"""
@@ -47,6 +66,7 @@ class RegistrationHandler:
             return ConversationHandler.END
         if not hasattr(self, '_pending_passwords'):
             self._pending_passwords = {}
+        self.purge_expired_pending_passwords()
         self._pending_passwords.pop(user.id, None)
 
         # Clear interrupted form data without dropping a /start referral.
@@ -110,7 +130,8 @@ class RegistrationHandler:
             await update.message.reply_text(f"❌ {error}\nيرجى المحاولة مجددًا:")
             return ENTER_PASSWORD
         
-        self._pending_passwords[update.effective_user.id] = password
+        self.purge_expired_pending_passwords()
+        self._pending_passwords[update.effective_user.id] = (password, time.monotonic())
         context.user_data.pop('mt5_password', None)
         await update.message.reply_text(
             "✅ تم استلام كلمة المرور.\n\n"
@@ -132,7 +153,7 @@ class RegistrationHandler:
         context.user_data['mt5_server'] = server
         
         # The password stays in handler memory and is never put in persistent user_data.
-        if update.effective_user.id not in self._pending_passwords:
+        if not self._get_pending_password(update.effective_user.id):
             await update.message.reply_text('انتهت صلاحية كلمة المرور. أعد إدخالها من /register.')
             return ENTER_PASSWORD
 
@@ -181,7 +202,8 @@ class RegistrationHandler:
         query = update.callback_query
         
         # Pull the password from non-persistent handler memory and consume it once.
-        password = self._pending_passwords.pop(user_id, None)
+        password = self._get_pending_password(user_id)
+        self._pending_passwords.pop(user_id, None)
         context.user_data.pop('mt5_password', None)
         if not password:
             await query.edit_message_text('انتهت صلاحية كلمة المرور. أعد التسجيل من /register.')
@@ -290,6 +312,10 @@ class RegistrationHandler:
                 )
                 context.user_data.clear()
                 return ConversationHandler.END
+        finally:
+                # Release the local reference even when provider/network/database
+                # code raises before the normal success-path deletion.
+                password = None
                         
     async def complete(self, update: Update, context: CallbackContext) -> int:
         """Complete registration with risk preference"""
@@ -305,16 +331,21 @@ class RegistrationHandler:
                 )
                 return COMPLETE
             else:
-                risk = float(risk_str) / 100
+                try:
+                    risk = parse_risk_percent(risk_str)
+                except ValueError:
+                    minimum, maximum = risk_limits_percent()
+                    await query.edit_message_text(
+                        f"❌ نسبة مخاطرة غير صالحة. اختر قيمة بين {minimum:g} و{maximum:g}%.")
+                    return COMPLETE
         else:
             # Custom risk input
             try:
-                risk = float(update.message.text) / 100
-                if risk < 0.001 or risk > 0.1:
-                    raise ValueError
+                risk = parse_risk_percent(update.message.text)
             except:
+                minimum, maximum = risk_limits_percent()
                 await update.message.reply_text(
-                    "❌ نسبة مخاطرة غير صالحة. أدخل رقمًا بين 0.1 و10:"
+                    f"❌ نسبة مخاطرة غير صالحة. أدخل رقمًا بين {minimum:g} و{maximum:g}:"
                 )
                 return COMPLETE
         

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 import logging
 from types import SimpleNamespace
+from sqlalchemy import case, func, or_, update
 from sqlalchemy.orm import Session
 
 from database.models import User, SubscriptionPlan
@@ -122,16 +123,17 @@ class SubscriptionService:
         
         plan = self.get_user_plan(user_id)
         
-        # Reset daily counter if new day
+        # Treat an old date as zero for this read without writing a racy reset.
+        # The atomic reservation performs the actual day rollover.
+        current_trades = int(user.daily_trades or 0)
         if user.last_trade_date and user.last_trade_date.date() < datetime.utcnow().date():
-            user.daily_trades = 0
-            self.db.commit()
+            current_trades = 0
         
         # Check limit
-        if user.daily_trades >= plan.max_trades_per_day:
+        if current_trades >= plan.max_trades_per_day:
             return False, {
                 "limited": True,
-                "current": user.daily_trades,
+                "current": current_trades,
                 "limit": plan.max_trades_per_day,
                 "plan": plan.tier,
                 "reset": datetime.utcnow().replace(hour=0, minute=0, second=0) + timedelta(days=1)
@@ -139,10 +141,98 @@ class SubscriptionService:
         
         return True, {
             "limited": False,
-            "current": user.daily_trades,
+            "current": current_trades,
             "limit": plan.max_trades_per_day,
-            "remaining": plan.max_trades_per_day - user.daily_trades
+            "remaining": plan.max_trades_per_day - current_trades
         }
+
+    def reserve_trade_slot(self, user_id: int) -> Tuple[bool, Dict[str, Any]]:
+        """Atomically reserve one daily trade slot across sessions and workers."""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if not user:
+            return False, {"error": "User not found"}
+        plan = self.get_user_plan(user_id)
+        limit = int(plan.max_trades_per_day)
+        now = datetime.utcnow()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if limit <= 0:
+            current = int(user.daily_trades or 0) if user.last_trade_date and user.last_trade_date >= day_start else 0
+            return False, {
+                "limited": True,
+                "current": current,
+                "limit": limit,
+                "plan": plan.tier,
+                "reset": day_start + timedelta(days=1),
+            }
+        rollover = or_(User.last_trade_date.is_(None), User.last_trade_date < day_start)
+        allowed = or_(rollover, func.coalesce(User.daily_trades, 0) < limit)
+        result = self.db.execute(
+            update(User)
+            .where(
+                User.telegram_id == user_id,
+                User.is_active.is_(True),
+                User.is_banned.is_(False),
+                allowed,
+            )
+            .values(
+                daily_trades=case(
+                    (rollover, 1),
+                    else_=func.coalesce(User.daily_trades, 0) + 1,
+                ),
+                last_trade_date=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        self.db.commit()
+        if result.rowcount != 1:
+            self.db.expire_all()
+            current_user = self.user_repo.get_by_telegram_id(user_id)
+            current = 0
+            if current_user and current_user.last_trade_date and current_user.last_trade_date >= day_start:
+                current = int(current_user.daily_trades or 0)
+            return False, {
+                "limited": True,
+                "current": current,
+                "limit": limit,
+                "plan": plan.tier,
+                "reset": day_start + timedelta(days=1),
+            }
+        current = int(user.daily_trades or 0)
+        return True, {
+            "limited": False,
+            "current": current,
+            "limit": limit,
+            "remaining": max(0, limit - current),
+            "reserved_at": now,
+        }
+
+    def release_trade_slot(self, user_id: int, reserved_at: datetime) -> None:
+        """Release a reservation only when the broker definitively rejected it."""
+        day_start = reserved_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        self.db.execute(
+            update(User)
+            .where(
+                User.telegram_id == user_id,
+                User.last_trade_date >= day_start,
+                User.last_trade_date < day_end,
+                func.coalesce(User.daily_trades, 0) > 0,
+            )
+            .values(daily_trades=func.coalesce(User.daily_trades, 0) - 1)
+            .execution_options(synchronize_session=False)
+        )
+
+    def record_trade_statistics(self, user_id: int, volume: float) -> None:
+        """Update totals only for broker-accepted pending or verified executions."""
+        self.db.execute(
+            update(User)
+            .where(User.telegram_id == user_id)
+            .values(
+                total_trades=func.coalesce(User.total_trades, 0) + 1,
+                total_volume=func.coalesce(User.total_volume, 0.0) + float(volume),
+            )
+            .execution_options(synchronize_session=False)
+        )
     
     def check_position_size_limit(self, user_id: int, requested_size: float) -> Tuple[bool, str]:
         """Check if requested position size is within plan limits"""

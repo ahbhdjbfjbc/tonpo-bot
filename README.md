@@ -23,7 +23,7 @@ Tonpo Bot is a **Telegram trading bot** that:
 - 🤖 **Executes trades automatically** — send a signal, bot executes on your MT5 instantly
 - 📊 **Smart risk management** — automatic position sizing based on your configured risk %
 - 💰 **Subscriptions** — Free, Basic, Pro, Enterprise tiers with usage limits
-- 💳 **Crypto payments** — USDT and BTC with automatic on-chain verification
+- 💳 **Crypto payments** — USDT and BTC payment requests with manual administrator review
 - 📈 **Live dashboard** — check balance, positions, P&L directly from Telegram
 - 🔐 **Secure** — your MT5 credentials never stored locally
 
@@ -49,7 +49,7 @@ This bot uses the **[Tonpo SDK](https://github.com/TonpoLabs/tonpo-py)** to comm
 ### Subscriptions & Payments
 - **Tiered plans** — Free (10 trades/day) to Enterprise (unlimited)
 - **Crypto payments** — USDT (ERC-20) or BTC
-- **Auto-verification** — on-chain payment detection
+- **Manual verification** — users submit proof; an authorized administrator checks it before activation
 - **Usage limits** — configurable per plan (trades/day, accounts, features)
 
 ### Admin
@@ -229,7 +229,7 @@ TP3 2350.00
 | Priority support | — | — | ✅ | ✅ |
 | Price | Free | $9.99/mo | $29.99/mo | $99.99/mo |
 
-Payments accepted in **USDT (ERC-20)** and **BTC**. Automatic on-chain verification.
+Payment requests support configured **USDT** and **BTC** wallets. Users submit a transaction proof for **manual administrator review**; a submitted hash or signed provider webhook never activates a subscription. Do not promise automatic on-chain verification: that integration is disabled.
 
 ---
 
@@ -289,8 +289,10 @@ Trade executed in < 2 seconds
 | `GATEWAY_PORT` | ✅ | `443` for SSL, `8080` for plain HTTP |
 | `GATEWAY_USE_SSL` | ✅ | `true` or `false` |
 | `GATEWAY_API_KEY_HEADER` | ❌ | Header name (default: `X-API-Key`) |
-| `WEBHOOK_MODE` | ❌ | `true` for webhooks, `false` for polling |
-| `WEBHOOK_URL` | ❌ | Public HTTPS URL for webhook mode |
+| `USE_WEBHOOK` | ❌ | `true` to enable webhooks, `false` for polling (default: `false`) |
+| `WEBHOOK_URL` | Required when enabled | Public HTTPS base URL without credentials, query, or fragment |
+| `MAX_SIGNAL_AGE_SECONDS` | ❌ | Maximum accepted signal age (default: `300`) |
+| `MAX_FUTURE_SIGNAL_SKEW_SECONDS` | ❌ | Allowed future clock skew (default: `30`) |
 | `LOG_LEVEL` | ❌ | `DEBUG` / `INFO` / `WARNING` (default: `INFO`) |
 ---
 

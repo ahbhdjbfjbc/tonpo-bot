@@ -29,7 +29,7 @@ def test_queue_without_redis_url_is_offline_and_explicit(monkeypatch):
     try:
         queue.send_task("tasks.example")
     except RuntimeError as exc:
-        assert "REDIS_URL" in str(exc)
+        assert "not production-ready" in str(exc)
     else:
         raise AssertionError("sending a task without Redis must fail clearly")
 
