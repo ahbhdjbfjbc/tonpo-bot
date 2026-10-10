@@ -34,7 +34,7 @@ from services.cache import CacheService
 from services.queue import QueueService, AsyncTaskManager
 from services.monitoring import MonitoringService
 from database.db_persistence import DBPersistence
-from gateway_client import ExecutionProvider
+from gateway_client import ExecutionProvider, MetaDockerExecutionProvider
 from core.models import UnifiedSignal
 from services.signal_pipeline import SignalPipeline
 try:
@@ -125,7 +125,13 @@ class Bot:
         self._setup_handlers()
         
         # Initialize execution provider
-        self.execution_provider = ExecutionProvider(use_gateway=settings.USE_GATEWAY)
+        if str(getattr(settings, "ENGINE_PROVIDER", "tonpo")).lower() == "metadocker":
+            self.execution_provider = MetaDockerExecutionProvider(
+                db_manager.get_session,
+                timeout=float(getattr(settings, "METADOCKER_REQUEST_TIMEOUT", 15.0)),
+            )
+        else:
+            self.execution_provider = ExecutionProvider(use_gateway=settings.USE_GATEWAY)
 
     def _setup_middleware(self):
         self.application.add_error_handler(self.error_handler.handle)
@@ -296,9 +302,12 @@ class Bot:
         # Avoid even opening a gateway connection during a dry run.
         if not settings.TRADING_DRY_RUN:
             try:
-                await self.execution_provider.initialize(settings.gateway_config)
-                self._load_gateway_credentials()
-                logger.info("Gateway initialized successfully")
+                if hasattr(self.execution_provider, "initialize"):
+                    await self.execution_provider.initialize(settings.gateway_config)
+                    self._load_gateway_credentials()
+                    logger.info("Tonpo gateway initialized successfully")
+                else:
+                    logger.info("MetaDocker provider selected; connections resolve from EngineInstance bindings")
             except Exception as exc:
                 logger.error('Gateway initialization failed (%s)', type(exc).__name__)
         else:
@@ -368,10 +377,26 @@ class Bot:
                 when=0,
                 name="background_tasks"
             )
+            if getattr(settings, "TRADE_RESULTS_CHANNEL_ID", None):
+                application.job_queue.run_repeating(
+                    lambda ctx: asyncio.ensure_future(self._retry_trade_publications()),
+                    interval=60,
+                    first=60,
+                    name="trade_channel_publication_retry",
+                )
         else:
             logger.info("Dry-run enabled: automatic background tasks are disabled")
 
         logger.info("Bot initialized successfully")
+
+    async def _retry_trade_publications(self):
+        """Drain failed/stale execution announcements without retrying trades."""
+        try:
+            count = await self.notification.retry_trade_channel_publications()
+            if count:
+                logger.info("Republished %s trade channel announcements", count)
+        except Exception as exc:
+            logger.error("Trade channel retry worker failed (%s)", type(exc).__name__)
 
     async def _post_shutdown(self, application):
         """Shut down all services — fast and clean"""

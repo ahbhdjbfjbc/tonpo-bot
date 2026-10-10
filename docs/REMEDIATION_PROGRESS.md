@@ -15,6 +15,8 @@
 - إضافة سياسة MetaDocker: HTTPS افتراضيًا، allowlist اختيارية، ورفض العناوين العامة غير الموثوقة.
 - تنفيذ health-check لـMetaDocker قبل حفظ الربط.
 - إبطال cache الاتصال عند تغيير endpoint/key أو تعطيل المحرك.
+- جعل اختيار `ENGINE_PROVIDER=metadocker` موحدًا في bot وweb، مع إيقاف تسجيل Tonpo القديم برسالة صريحة بدل ادعاء ربط MetaDocker.
+- إضافة outbox retry/reclaimer لقناة النتائج: الصفوف الفاشلة أو العالقة يمكن أن يعيدها bot worker دون إعادة تنفيذ الصفقة.
 - إضافة `/api/live` و`/api/ready`؛ readiness يفحص DB وAlembic schema وRedis.
 - إضافة خدمة `tonpo-migrate` إلى Compose وجعل bot/web يعتمدان على نجاح `alembic upgrade head`.
 - ربط منافذ PostgreSQL وRedis على `127.0.0.1` بدل النشر العام.
@@ -36,11 +38,12 @@
 - تدوير الأسرار التي كانت داخل archive وفق بيئة النشر الفعلية.
 - تشغيل PostgreSQL/Redis وAlembic في staging والتحقق من fresh install وupgrade.
 - اختبار متعدد المستخدمين مع حسابات MT5 Demo منفصلة.
+- تنفيذ تدوير الأسرار في بيئة النشر الفعلية؛ لا يمكن تدوير أسرار غير موجودة في هذه البيئة دون صلاحية حسابات النشر.
 
 ### P1
 
-- توحيد تسجيل Telegram مع `EngineInstance` أو فصل مسار Tonpo القديم بوضوح.
-- إضافة outbox worker/retry/reclaimer لقناة النتائج.
+- توحيد تسجيل Telegram مع `EngineInstance` أو فصل مسار Tonpo القديم بوضوح. تم تنفيذ الفصل الصريح مؤقتًا؛ الربط الكامل للمستخدم يتم عبر Web API مع health-check.
+- إضافة outbox worker/retry/reclaimer لقناة النتائج. تم تنفيذ worker داخل bot، وما زال اختبار Telegram/DB حيًا مطلوبًا.
 - إضافة reconciliation لنتائج `UNKNOWN` وعمليات timeout.
 - إكمال فرض entitlements للاشتراك.
 - تقوية مصادقة الويب وتخزين الرموز.
