@@ -268,6 +268,8 @@ class SignalPipeline:
             self.db.commit()
             event = 'signal_executed' if result.get('success') else 'execution_unknown' if result.get('status') == 'unknown' else 'execution_failed'
             await self.notifications.notify_event(envelope.user_id, event, title='Signal decision', message=str(result.get('error') or result.get('status') or 'Execution result'), data={'signal_id': receipt.signal_id, 'status': receipt.status}, event_key=f'signal:{receipt.id}:result')
+            if result.get('success') and result.get('status') == 'executed' and not getattr(settings, 'TRADING_DRY_RUN', True):
+                await self.notifications.publish_trade_execution(receipt.id, result)
             return result
         except Exception as exc:
             self.db.rollback()

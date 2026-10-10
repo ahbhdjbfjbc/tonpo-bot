@@ -102,6 +102,26 @@ def _target_user_id() -> int:
     return target
 
 
+def _target_user_ids(db: Session) -> list[int]:
+    """Resolve TradingView recipients from server-side subscription state."""
+    if not bool(getattr(settings, "TRADINGVIEW_BROADCAST_TO_SUBSCRIBERS", False)):
+        return [_target_user_id()]
+    from database.models import User
+
+    now = datetime.utcnow()
+    users = db.query(User).filter(
+        User.is_active.is_(True),
+        User.is_verified.is_(True),
+        User.is_banned.is_(False),
+    ).all()
+    return [
+        int(user.telegram_id)
+        for user in users
+        if (user.subscription_tier or "free").lower() != "free"
+        and (user.subscription_expiry is None or user.subscription_expiry >= now)
+    ]
+
+
 def _normalize_symbol(value: str) -> str:
     raw = str(value).upper().strip()
     mapping = getattr(settings, "TRADINGVIEW_SYMBOL_MAP", {}) or {}
@@ -150,7 +170,9 @@ async def tradingview_webhook(
         logger.warning("TradingView webhook unauthorized from %s", request.client.host if request.client else "unknown")
         raise HTTPException(status_code=401, detail="Unauthorized")
     _check_rate_limit(_client_key(request))
-    target_user = _target_user_id()
+    target_users = _target_user_ids(db)
+    if not target_users:
+        raise HTTPException(status_code=503, detail="No active subscribers are configured")
 
     raw = await request.body()
     if not raw or len(raw) > 32_768:
@@ -191,27 +213,53 @@ async def tradingview_webhook(
     if signal.strategy or signal.source:
         payload_obj["strategy"] = signal.strategy or signal.source
     payload_obj["id"] = external_id
-    envelope = UnifiedSignal(
-        source="tradingview", payload=json.dumps(payload_obj), user_id=target_user,
-        external_id=external_id, received_at=datetime.now(timezone.utc).replace(tzinfo=None),
-        metadata={"timestamp": signal.timestamp},
-    )
-
     from web.runtime import get_signal_pipeline
-    try:
-        result = await get_signal_pipeline(db).process(envelope)
-    except Exception:
-        logger.error("SignalPipeline processing failed (%s)", "pipeline_error")
-        raise HTTPException(status_code=500, detail="Processing failed")
+    results: list[dict[str, Any]] = []
+    for target_user in target_users:
+        envelope = UnifiedSignal(
+            source="tradingview", payload=json.dumps(payload_obj), user_id=target_user,
+            external_id=external_id, received_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            metadata={"timestamp": signal.timestamp},
+        )
+        try:
+            result = await get_signal_pipeline(db).process(envelope)
+        except Exception:
+            logger.error("SignalPipeline processing failed (%s)", "pipeline_error")
+            result = {"success": False, "status": "unknown", "error": "Processing failed"}
+        results.append({
+            "status": str(result.get("status") or "unknown"),
+            "success": bool(result.get("success")),
+            "receipt_id": result.get("receipt_id"),
+            "reason": _public_error(result),
+        })
 
-    status_name = str(result.get("status") or "unknown")
-    accepted = {"dry_run", "executed", "partial", "confirmation_required", "manual_review", "pending", "unknown"}
-    http_status = 200 if status_name in accepted else (409 if status_name in {"duplicate", "already_processed"} else 400)
-    response: dict[str, Any] = {"status": status_name, "success": bool(result.get("success")), "dry_run": bool(getattr(settings, "TRADING_DRY_RUN", True))}
-    if result.get("receipt_id") is not None:
-        response["receipt_id"] = result["receipt_id"]
-    public_error = _public_error(result)
-    if public_error:
-        response["reason"] = public_error
-    logger.info("TradingView signal processed target=%s symbol=%s status=%s dry_run=%s", target_user, symbol, status_name, response["dry_run"])
-    return response if http_status == 200 else JSONResponse(status_code=http_status, content=response)
+    summary: dict[str, int] = {}
+    for item in results:
+        summary[item["status"]] = summary.get(item["status"], 0) + 1
+    # Keep the legacy single-target response shape while exposing aggregate
+    # counts for the subscriber fan-out mode.
+    if len(results) == 1:
+        item = results[0]
+        response: dict[str, Any] = {
+            "status": item["status"],
+            "success": item["success"],
+            "dry_run": bool(getattr(settings, "TRADING_DRY_RUN", True)),
+            "receipt_id": item["receipt_id"],
+        }
+        if item["reason"]:
+            response["reason"] = item["reason"]
+        status_name = item["status"]
+        http_status = 200 if status_name in {"dry_run", "executed", "partial", "confirmation_required", "manual_review", "pending", "unknown"} else (409 if status_name in {"duplicate", "already_processed"} else 400)
+        logger.info("TradingView signal processed targets=1 symbol=%s status=%s dry_run=%s", symbol, status_name, response["dry_run"])
+        return response if http_status == 200 else JSONResponse(status_code=http_status, content=response)
+
+    response = {
+        "status": "broadcast_processed",
+        "success": any(item["success"] for item in results),
+        "dry_run": bool(getattr(settings, "TRADING_DRY_RUN", True)),
+        "targets": len(results),
+        "summary": summary,
+        "results": results,
+    }
+    logger.info("TradingView signal broadcast targets=%s symbol=%s summary=%s", len(results), symbol, summary)
+    return response

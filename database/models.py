@@ -349,6 +349,32 @@ class EngineInstance(Base):
     )
 
 
+class TradeChannelPublication(Base):
+    """Durable outbox state for the central executed-trades channel."""
+    __tablename__ = 'trade_channel_publications'
+
+    id = Column(Integer, primary_key=True)
+    signal_receipt_id = Column(Integer, ForeignKey('signal_receipts.id', ondelete='CASCADE'), nullable=False, unique=True)
+    trade_uuid = Column(String(36), nullable=True, index=True)
+    symbol = Column(String(32), nullable=False)
+    order_type = Column(String(32), nullable=False)
+    position_size = Column(Float, nullable=True)
+    entry_price = Column(Numeric(20, 5), nullable=True)
+    stop_loss = Column(Numeric(20, 5), nullable=True)
+    take_profits = Column(JSON, nullable=True)
+    status = Column(String(20), nullable=False, default='pending', server_default='pending')
+    telegram_message_id = Column(BigInteger, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0, server_default='0')
+    last_error = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    published_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_trade_publication_status', 'status', 'created_at'),
+    )
+
+
 class Notification(Base):
     """User notifications"""
     __tablename__ = 'notifications'

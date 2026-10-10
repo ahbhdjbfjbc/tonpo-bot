@@ -2,11 +2,13 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import asyncio
+from html import escape
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from database.repositories import NotificationRepository, UserRepository
-from database.models import Notification, User
+from database.models import Notification, TradeChannelPublication, User
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -157,6 +159,82 @@ class NotificationService:
             data=trade_data
         )
     
+    async def publish_trade_execution(self, signal_receipt_id: int, result: Dict[str, Any]) -> bool:
+        """Publish one executed trade to the configured second channel.
+
+        A durable outbox row is marked ``publishing`` before Telegram is called;
+        failed rows can be retried while a concurrent duplicate is skipped.
+        User identity and account credentials are never included publicly.
+        """
+        channel_id = getattr(settings, "TRADE_RESULTS_CHANNEL_ID", None)
+        if not channel_id or not self.bot:
+            return False
+
+        signal = result.get("signal") or {}
+        calculated = result.get("calculated") or {}
+        row = self.db.query(TradeChannelPublication).filter_by(
+            signal_receipt_id=signal_receipt_id
+        ).first()
+        if row and row.status in {"published", "publishing"}:
+            return row.status == "published"
+        if row is None:
+            row = TradeChannelPublication(
+                signal_receipt_id=signal_receipt_id,
+                trade_uuid=result.get("trade_id"),
+                symbol=str(signal.get("symbol") or "UNKNOWN")[:32],
+                order_type=str(signal.get("order_type") or "UNKNOWN")[:32],
+                position_size=calculated.get("position_size"),
+                entry_price=signal.get("entry"),
+                stop_loss=signal.get("stop_loss"),
+                take_profits=signal.get("take_profits") or [],
+                status="publishing",
+            )
+            self.db.add(row)
+        else:
+            row.status = "publishing"
+            row.last_error = None
+        row.attempts = int(row.attempts or 0) + 1
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            existing = self.db.query(TradeChannelPublication).filter_by(
+                signal_receipt_id=signal_receipt_id
+            ).first()
+            return bool(existing and existing.status == "published")
+
+        tps = ", ".join(str(value) for value in (signal.get("take_profits") or []))
+        message = (
+            "<b>✅ تنفيذ صفقة</b>\n\n"
+            f"<b>{escape(str(signal.get('order_type') or 'UNKNOWN'))} "
+            f"{escape(str(signal.get('symbol') or 'UNKNOWN'))}</b>\n"
+            f"الحجم: <code>{escape(str(calculated.get('position_size') or '-'))}</code>\n"
+            f"الدخول: <code>{escape(str(signal.get('entry') or 'MARKET'))}</code>\n"
+            f"وقف الخسارة: <code>{escape(str(signal.get('stop_loss') or '-'))}</code>\n"
+            f"الأهداف: <code>{escape(tps or '-')}</code>"
+        )
+        try:
+            sent = await self.bot.send_message(
+                chat_id=int(channel_id), text=message, parse_mode="HTML"
+            )
+            row.status = "published"
+            row.telegram_message_id = getattr(sent, "message_id", None)
+            row.published_at = datetime.utcnow()
+            row.last_error = None
+            self.db.commit()
+            return True
+        except Exception as exc:
+            self.db.rollback()
+            row = self.db.query(TradeChannelPublication).filter_by(
+                signal_receipt_id=signal_receipt_id
+            ).first()
+            if row:
+                row.status = "failed"
+                row.last_error = type(exc).__name__[:255]
+                self.db.commit()
+            logger.error("Trade channel publication failed (%s)", type(exc).__name__)
+            return False
+
     async def notify_trade_failed(self, user_id: int, error: str, trade_data: Dict[str, Any]):
         """Notify user about trade failure"""
         template = self.templates['trade_failed']

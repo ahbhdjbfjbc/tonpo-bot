@@ -28,11 +28,15 @@
 - إضافة `MetaDockerConnectionAdapter` و`MetaDockerExecutionProvider` مع اختبارات mocked.
 - إضافة API آمن لربط/عرض/تعطيل المحرك دون عرض API key.
 - جعل guest assistant إرشاديًا فقط، مع رفض tokens غير الصالحة.
+- إضافة بث TradingView اختياري إلى المشتركين النشطين بدل مستخدم واحد فقط.
+- إضافة `trade_channel_publications` كـ outbox دائم لقناة نتائج الصفقات مع منع التكرار.
 
 ## ما بقي قبل Demo
 
 - تشغيل migration على PostgreSQL فعلي واختبار rollback حيث يكون آمنًا.
 - توفير MetaDocker `v1.0.1` على شبكة خاصة وحسابي MT5 Demo منفصلين.
+- تفعيل `TRADINGVIEW_BROADCAST_TO_SUBSCRIBERS=true` بعد التحقق من قائمة المشتركين.
+- إضافة `TRADE_RESULTS_CHANNEL_ID` واختبار صلاحية البوت في قناة النتائج.
 - تنفيذ provisioning منفصل محدود الصلاحيات، ثم اختبار reconciliation والعزل الفعلي.
 - إضافة اختبارات webhook المتزامنة واختبارات الضغط.
 
