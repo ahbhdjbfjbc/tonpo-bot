@@ -37,3 +37,41 @@ def test_health_still_ok(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["dry_run"] is True
+
+
+def test_spa_response_has_csp_headers(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    csp = response.headers.get("content-security-policy", "")
+    assert "script-src-attr 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+
+
+
+def test_ws_authenticates_with_first_frame_and_tolerates_non_object_messages(client, monkeypatch):
+    from types import SimpleNamespace
+    from web.api import ws as ws_api
+
+    user = SimpleNamespace(id=71, is_active=True, is_banned=False, has_gateway_credentials=False)
+
+    class FakeDB:
+        def expire_all(self):
+            pass
+
+        def close(self):
+            pass
+
+    db = FakeDB()
+    monkeypatch.setattr(ws_api.db_manager, "_initialized", True, raising=False)
+    monkeypatch.setattr(ws_api.db_manager, "get_session", lambda: db)
+    monkeypatch.setattr(ws_api, "_auth_user", lambda token, _db: user if token == "valid-test-token" else None)
+    monkeypatch.setattr(ws_api, "_snapshot", lambda _db, _user: {"type": "snapshot", "user_id": 71})
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "auth", "token": "valid-test-token"})
+        assert ws.receive_json()["type"] == "connected"
+        assert ws.receive_json() == {"type": "snapshot", "user_id": 71}
+        ws.send_json(["not", "an", "object"])
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"

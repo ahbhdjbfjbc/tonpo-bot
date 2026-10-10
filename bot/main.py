@@ -9,6 +9,7 @@ if not __package__:
 import logging
 import asyncio
 import warnings
+from datetime import datetime, timezone
 from telegram.warnings import PTBUserWarning
 from telegram import BotCommand
 from telegram.request import HTTPXRequest
@@ -31,7 +32,7 @@ from bot.middleware import AuthMiddleware, RateLimitMiddleware, ErrorHandler
 #from services.mt5_manager import MT5ConnectionManager
 from services.notification import NotificationService
 from services.cache import CacheService
-from services.queue import QueueService, AsyncTaskManager
+from services.queue import AsyncTaskManager
 from services.monitoring import MonitoringService
 from database.db_persistence import DBPersistence
 from gateway_client import ExecutionProvider, MetaDockerExecutionProvider
@@ -73,7 +74,6 @@ class Bot:
         
         # Initialize sync services
         self.cache = CacheService()
-        self.queue = QueueService()
         self.task_manager = AsyncTaskManager()
         self.notification = NotificationService(self.db, None)
         self.monitoring = MonitoringService(self.db)
@@ -91,13 +91,13 @@ class Bot:
 
         # Build application — handlers registered BEFORE build() via pre_init isn't
         # available, so we build first then add_handler before initialize() is called
-        persistence = DBPersistence()
+        self.persistence = DBPersistence()
         self.application = (
             ApplicationBuilder()
             .token(settings.BOT_TOKEN)
             .request(_telegram_request())
             .get_updates_request(_telegram_request())
-            .persistence(persistence)
+            .persistence(self.persistence)
             .post_init(self._post_init)
             .post_shutdown(self._post_shutdown)
             .build()
@@ -136,6 +136,11 @@ class Bot:
     def _setup_middleware(self):
         self.application.add_error_handler(self.error_handler.handle)
 
+    def _wrap_limited_command(self, action, handler):
+        """Authenticate first, then apply the distributed action rate limit."""
+        limited = self.rate_limiter.wrap(action)(handler)
+        return self.auth_middleware.wrap(limited)
+
     def _setup_handlers(self):
         app = self.application
 
@@ -164,11 +169,11 @@ class Bot:
 
         # Trading conversation
         trade_conv = ConversationHandler(
-            entry_points=[CommandHandler("trade", self.auth_middleware.wrap(self.trading.start_trade))],
+            entry_points=[CommandHandler("trade", self._wrap_limited_command("trade", self.trading.start_trade))],
             states=self.trading.get_states(),
             fallbacks=[
                 CommandHandler("cancel", self.trading.cancel),
-                CommandHandler("trade", self.auth_middleware.wrap(self.trading.start_trade)),
+                CommandHandler("trade", self._wrap_limited_command("trade", self.trading.start_trade)),
             ],
             name="trading",
             persistent=True,
@@ -179,11 +184,11 @@ class Bot:
 
         # Calculate conversation
         calc_conv = ConversationHandler(
-            entry_points=[CommandHandler("calculate", self.auth_middleware.wrap(self.trading.start_calculate))],
+            entry_points=[CommandHandler("calculate", self._wrap_limited_command("calculate", self.trading.start_calculate))],
             states=self.trading.get_states(),
             fallbacks=[
                 CommandHandler("cancel", self.trading.cancel),
-                CommandHandler("calculate", self.auth_middleware.wrap(self.trading.start_calculate)),
+                CommandHandler("calculate", self._wrap_limited_command("calculate", self.trading.start_calculate)),
             ],
             name="calculate",
             persistent=True,
@@ -194,11 +199,11 @@ class Bot:
 
         # Settings conversation
         settings_conv = ConversationHandler(
-            entry_points=[CommandHandler("settings", self.auth_middleware.wrap(self.settings_handler.start))],
+            entry_points=[CommandHandler("settings", self._wrap_limited_command("settings", self.settings_handler.start))],
             states=self.settings_handler.get_states(),
             fallbacks=[
                 CommandHandler("cancel", self.settings_handler.cancel),
-                CommandHandler("settings", self.auth_middleware.wrap(self.settings_handler.start)),
+                CommandHandler("settings", self._wrap_limited_command("settings", self.settings_handler.start)),
             ],
             name="settings",
             persistent=True,
@@ -243,7 +248,17 @@ class Bot:
             ("upgrade",   self.command_handlers.upgrade),
             ("subscription", getattr(self.command_handlers, "subscription", self.command_handlers.upgrade)),
         ]:
-            callback = self.auth_middleware.wrap(handler) if cmd in {"balance", "positions", "history", "trades", "status"} else handler
+            rate_actions = {
+                "balance": "balance",
+                "positions": "positions",
+                "history": "default",
+                "trades": "default",
+                "status": "default",
+            }
+            callback = (
+                self._wrap_limited_command(rate_actions[cmd], handler)
+                if cmd in rate_actions else handler
+            )
             app.add_handler(CommandHandler(cmd, callback))
 
         # Callback query router
@@ -272,7 +287,8 @@ class Bot:
             try:
                 envelope = UnifiedSignal(source='telegram_channel', payload=payload,
                                          user_id=user.telegram_id,
-                                         external_id=f'{message.chat_id}:{message.message_id}')
+                                         external_id=f'{message.chat_id}:{message.message_id}',
+                                         received_at=getattr(message, 'date', None) or datetime.now(timezone.utc))
                 result = await SignalPipeline(self.db, self.trading.trade_executor).process(envelope)
                 if result.get('status') not in {'duplicate', 'dry_run'}:
                     await self.notification.send_telegram(user.telegram_id,
@@ -293,6 +309,9 @@ class Bot:
 
     async def _post_init(self, application):
         """Called by PTB after event loop starts — safe for async init only"""
+        # DBPersistence keeps an in-process snapshot; PostgreSQL enforces the
+        # documented single bot replica before any updates are accepted.
+        self.persistence.acquire_single_instance_lock()
         logger.info("Initializing async services...")
         
         # The authenticated ingress may stay available in dry-run; execution remains blocked.
@@ -387,7 +406,17 @@ class Bot:
         else:
             logger.info("Dry-run enabled: automatic background tasks are disabled")
 
+        self.task_manager.create_task(
+            self._cleanup_registration_secrets(),
+            task_id="registration_secret_ttl_cleanup",
+        )
         logger.info("Bot initialized successfully")
+
+    async def _cleanup_registration_secrets(self):
+        """Periodically purge expired plaintext MT5 passwords from handler memory."""
+        while True:
+            self.registration.purge_expired_pending_passwords()
+            await asyncio.sleep(30)
 
     async def _retry_trade_publications(self):
         """Drain failed/stale execution announcements without retrying trades."""
@@ -430,6 +459,11 @@ class Bot:
                 pass
 
         # 4. Close database
+        try:
+            self.persistence.release_single_instance_lock()
+        except Exception as exc:
+            logger.error("Could not release bot singleton lock (%s)", type(exc).__name__)
+
         if self.db:
             try:
                 self.db.close()
@@ -508,18 +542,22 @@ class Bot:
                 await query.answer("يرجى إكمال التسجيل أولًا باستخدام /register", show_alert=True)
                 return
             action = data.removeprefix('risk_')
-            if action in {'0.5', '1.0', '2.0'}:
-                user.default_risk_factor = float(action) / 100
-                self.db.commit()
-                await query.answer()
-                await query.edit_message_text(f"✅ تم ضبط المخاطرة الافتراضية على {action}%.")
-            elif action == 'custom':
+            if action == 'custom':
                 await query.answer()
                 await query.edit_message_text(
                     "لإدخال نسبة مخصصة، افتح /settings ثم إعدادات المخاطر."
                 )
-            else:
-                await query.answer("إعداد المخاطر غير معروف", show_alert=True)
+                return
+            from services.risk_limits import parse_risk_percent
+            try:
+                risk_factor = parse_risk_percent(action)
+            except ValueError:
+                await query.answer("نسبة المخاطرة خارج الحدود المسموح بها.", show_alert=True)
+                return
+            user.default_risk_factor = risk_factor
+            self.db.commit()
+            await query.answer()
+            await query.edit_message_text(f"✅ تم ضبط المخاطرة الافتراضية على {action}%.")
         
         elif data.startswith('settings_') or data.startswith('settings:'):
             # Verify user is registered and active
@@ -586,6 +624,35 @@ class Bot:
                 
             await callbacks.handle_notification(update, context, [action])
         
+        elif data == 'position_close_all':
+            user = self.user_repo.get_by_telegram_id(user_id)
+            if (not user or not user.is_verified or not user.is_active or user.is_banned):
+                await query.answer("❌ الحساب غير مصرح له بهذا الإجراء.", show_alert=True)
+                return
+
+            from bot.callbacks import CallbackHandlers
+            callbacks = CallbackHandlers(self.db, self.bot, self.execution_provider)
+            await query.answer()
+            await callbacks.handle_position(update, context, ['close_all'])
+
+        elif data.startswith('position_close_all:'):
+            user = self.user_repo.get_by_telegram_id(user_id)
+            if (not user or not user.is_verified or not user.is_active or user.is_banned):
+                await query.answer("❌ الحساب غير مصرح له بهذا الإجراء.", show_alert=True)
+                return
+
+            choice = data.partition(':')[2]
+            if choice not in {'yes', 'no'}:
+                await query.answer("إجراء غير صالح.", show_alert=True)
+                return
+
+            from bot.callbacks import CallbackHandlers
+            callbacks = CallbackHandlers(self.db, self.bot, self.execution_provider)
+            await query.answer()
+            await callbacks.handle_confirmation(
+                update, context, ['close_all_positions', choice]
+            )
+
         elif data.startswith('position_'):
             user = self.user_repo.get_by_telegram_id(user_id)
             if not user:

@@ -17,6 +17,7 @@ from services.subscription import SubscriptionService
 from services.news_protection import NewsProtectionService
 from services.protection import ProtectionService
 from services.notification import NotificationService
+from services.signal_time import validate_signal_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +132,33 @@ class SignalPipeline:
         user = self.users.get_by_telegram_id(envelope.user_id)
         if not user or not user.is_active or not user.is_verified or user.is_banned:
             return {'success': False, 'status': 'unauthorized', 'error': 'Trading account is unavailable'}
+        if existing_receipt is not None and existing_receipt.user_id != user.id:
+            return {'success': False, 'status': 'unauthorized', 'error': 'Confirmation is not available'}
+        timestamp_value = (envelope.metadata or {}).get('timestamp')
+        if timestamp_value is None:
+            timestamp_value = envelope.received_at
+        signal_time, time_status = validate_signal_timestamp(
+            timestamp_value,
+            max_age_seconds=getattr(settings, 'MAX_SIGNAL_AGE_SECONDS', 300),
+            max_future_skew_seconds=getattr(settings, 'MAX_FUTURE_SIGNAL_SKEW_SECONDS', 30),
+        )
+        if time_status:
+            if (
+                time_status == 'stale_signal'
+                and existing_receipt is not None
+                and existing_receipt.status in {'manual_review', 'confirmation_required'}
+            ):
+                existing_receipt.status = 'expired'
+                existing_receipt.rejection_reason = 'Signal confirmation window expired'
+                self.db.commit()
+            messages = {
+                'stale_signal': 'Signal is older than the configured acceptance window',
+                'future_signal': 'Signal timestamp is too far in the future',
+                'invalid_timestamp': 'Signal timestamp is invalid',
+            }
+            return {'success': False, 'status': time_status, 'error': messages[time_status]}
+        envelope.received_at = signal_time.replace(tzinfo=None)
         if existing_receipt is not None:
-            if existing_receipt.user_id != user.id:
-                return {'success': False, 'status': 'unauthorized', 'error': 'Confirmation is not available'}
             # Claim the pending confirmation with a conditional DB write so two
             # simultaneous callback deliveries cannot execute the same receipt.
             claimed = self.db.query(SignalReceipt).filter(
@@ -301,8 +326,14 @@ class SignalPipeline:
         receipt = self.db.query(SignalReceipt).filter_by(id=receipt_id).first()
         if not user or not receipt or receipt.user_id != user.id:
             return {'success': False, 'status': 'unauthorized'}
-        envelope = UnifiedSignal(source=receipt.source, payload=receipt.signal_text,
-                                 user_id=telegram_user_id)
+        signal_time = receipt.signal_timestamp or receipt.created_at
+        envelope = UnifiedSignal(
+            source=receipt.source,
+            payload=receipt.signal_text,
+            user_id=telegram_user_id,
+            received_at=signal_time,
+            metadata={'timestamp': signal_time.isoformat()} if signal_time else {},
+        )
         return await self.process(envelope, confirmed=True, existing_receipt=receipt)
 
     async def cancel(self, telegram_user_id, receipt_id):

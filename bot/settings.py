@@ -17,6 +17,7 @@ from bot.keyboards import (
     get_api_settings_keyboard
 )
 from bot.message_utils import safe_edit_message
+from services.risk_limits import parse_risk_percent, risk_limits_percent
 
 logger = logging.getLogger(__name__)
 
@@ -363,14 +364,14 @@ class SettingsHandler:
         
         if awaiting == 'risk_factor':
             try:
-                risk = float(text) / 100
-                if 0.001 <= risk <= 0.1:
-                    self.user_repo.update_user(user_id, default_risk_factor=risk)
-                    await update.message.reply_text(f"✅ تم تحديث نسبة المخاطرة إلى {float(text):.1f}%")
-                else:
-                    raise ValueError
+                risk = parse_risk_percent(text)
+                self.user_repo.update_user(user_id, default_risk_factor=risk)
+                await update.message.reply_text(f"✅ تم تحديث نسبة المخاطرة إلى {float(text):.1f}%")
             except:
-                await update.message.reply_text("❌ قيمة غير صالحة. أدخل رقمًا بين 0.1 و10.")
+                minimum, maximum = risk_limits_percent()
+                await update.message.reply_text(
+                    f"❌ قيمة غير صالحة. أدخل رقمًا بين {minimum:g} و{maximum:g}."
+                )
                 return CONFIRM_UPDATE
         
         elif awaiting == 'max_size':

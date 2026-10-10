@@ -27,7 +27,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.exc import IntegrityError
 
 from config.settings import settings
-from database.models import PaymentRequest as DatabasePaymentRequest, User, AdminRole, AdminAuditLog
+from database.models import PaymentRequest as DatabasePaymentRequest, User, AdminAuditLog
 from database.repositories import UserRepository
 
 Base = declarative_base()
@@ -218,8 +218,11 @@ class PaymentManager:
             method: Payment method (USDT or BTC)
         
         Returns:
-            Payment details to show to user (address, amount, expires_at)
+            Payment details to show to the user (address, amount, expires_at)
         """
+        raise RuntimeError(
+            "Automatic Billing payments are disabled; use the manual payment request and administrator approval workflow"
+        )
         logger.info(f"Initiating upgrade: user={user_id} → {plan_id}")
         
         # Call Billing to create payment
@@ -266,6 +269,9 @@ class PaymentManager:
         Returns:
             True if payment activated, False if expired/failed
         """
+        raise RuntimeError(
+            "Automatic Billing payment monitoring is disabled; subscription activation requires administrator approval"
+        )
         logger.info(f"Monitoring payment {payment_id} for user {user_id}")
         
         max_polls = 120  # 2 hours (120 * 60 sec = 2 hours, polling every 60 sec)
@@ -606,17 +612,9 @@ class PaymentService:
         }
 
     def _admin_role(self, admin_id: int) -> str | None:
-        """Return an authorized payment-review role, or None."""
+        """Return the temporary allowlist role; database AdminRole is not trusted."""
         if admin_id in set(getattr(settings, "ADMIN_USER_IDS", []) or []):
             return "SUPER_ADMIN"
-        role = self.db.query(AdminRole).filter(
-            AdminRole.telegram_id == admin_id, AdminRole.is_active == True  # noqa: E712
-        ).first()
-        if not role:
-            return None
-        permissions = set(role.permissions or [])
-        if role.role in {"ADMIN", "SUPER_ADMIN"} or "*" in permissions or "subscriptions.manage" in permissions:
-            return role.role
         return None
 
     def _require_payment_admin(self, admin_id: int) -> str:

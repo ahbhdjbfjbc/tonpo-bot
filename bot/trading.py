@@ -452,7 +452,12 @@ class TradingHandler:
                 positions = await connection.get_positions()
                 if positions:
                     formatted = format_positions(positions)
-                    await update.message.reply_text(formatted, parse_mode=ParseMode.HTML)
+                    from bot.keyboards import get_close_all_positions_keyboard
+                    await update.message.reply_text(
+                        formatted,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_close_all_positions_keyboard(),
+                    )
                 else:
                     await update.message.reply_text("لا توجد صفقات مفتوحة.")
             

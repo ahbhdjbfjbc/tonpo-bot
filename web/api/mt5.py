@@ -2,19 +2,18 @@
 from __future__ import annotations
 
 import logging
-import ipaddress
 from datetime import datetime
 from typing import Any, List
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from database.models import ConnectionLog, EngineInstance, User
+from database.models import ConnectionLog, EngineInstance, SubscriptionPlan, User
 from database.repositories import EngineInstanceRepository
 from services.auth import encrypt_gateway_api_key
-from services.subscription import SubscriptionService
 from gateway_client.metadocker import MetaDockerConnectionAdapter, MetaDockerError
 from web.deps import get_current_user, get_db
 from web.schemas import EngineInstanceIn, EngineInstanceOut, MT5StatusOut
@@ -24,7 +23,7 @@ router = APIRouter(prefix="/api/mt5", tags=["mt5"])
 
 
 def _validate_engine_endpoint(endpoint: str) -> None:
-    """Allow only explicitly trusted or private MetaDocker destinations."""
+    """Allow only operator-allowlisted MetaDocker destinations (SSRF boundary)."""
     parsed = urlsplit(endpoint)
     host = (parsed.hostname or "").lower().rstrip(".")
     allowed = {
@@ -34,22 +33,19 @@ def _validate_engine_endpoint(endpoint: str) -> None:
     }
     if not host:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Engine endpoint host is required")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Engine endpoint must not include credentials, query, or fragment",
+        )
     if bool(getattr(settings, "METADOCKER_REQUIRE_HTTPS", True)) and parsed.scheme != "https":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Engine endpoint must use HTTPS")
     if host in allowed:
         return
-    try:
-        address = ipaddress.ip_address(host)
-        is_trusted_private = address.is_private or address.is_loopback or address.is_link_local
-    except ValueError:
-        # Container/service names without a public DNS suffix are internal
-        # Compose/Kubernetes names; public names require explicit allowlisting.
-        is_trusted_private = "." not in host or host.endswith((".internal", ".local"))
-    if not is_trusted_private:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Engine endpoint host is not trusted; configure METADOCKER_ALLOWED_HOSTS",
-        )
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="Engine endpoint host is not allowlisted; configure METADOCKER_ALLOWED_HOSTS",
+    )
 
 
 def _engine_out(row: EngineInstance) -> EngineInstanceOut:
@@ -65,6 +61,19 @@ def _engine_out(row: EngineInstance) -> EngineInstanceOut:
         last_health_at=row.last_health_at.isoformat() if row.last_health_at else None,
         last_session=row.last_session,
     )
+
+
+def _connection_limit(user: User, db: Session) -> int:
+    """Read the connection entitlement without committing the caller's transaction."""
+    now = datetime.utcnow()
+    snapshot = user.subscription_features if isinstance(user.subscription_features, dict) else {}
+    if user.subscription_expiry and user.subscription_expiry >= now and "max_connections" in snapshot:
+        return max(0, int(snapshot.get("max_connections") or 0))
+    tier = "free" if user.subscription_expiry and user.subscription_expiry < now else user.subscription_tier
+    plan = db.query(SubscriptionPlan).filter_by(tier=tier).first()
+    if plan is None and tier != "free":
+        plan = db.query(SubscriptionPlan).filter_by(tier="free").first()
+    return max(0, int(plan.max_connections or 0)) if plan else 0
 
 
 @router.get("/engines", response_model=List[EngineInstanceOut])
@@ -83,14 +92,6 @@ async def bind_engine(
     """Bind one MetaDocker instance to this user/account, encrypted at rest."""
     _validate_engine_endpoint(payload.endpoint)
     repository = EngineInstanceRepository(db)
-    existing = repository.list_for_user(user.id)
-    same_instance = any(row.engine_instance_id == payload.engine_instance_id for row in existing)
-    plan = SubscriptionService(db).get_user_plan(user.telegram_id)
-    if not same_instance and len([row for row in existing if row.is_active]) >= int(plan.max_connections):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your subscription connection limit has been reached",
-        )
     connection = MetaDockerConnectionAdapter(
         payload.endpoint,
         payload.api_key,
@@ -108,6 +109,24 @@ async def bind_engine(
         ) from exc
     finally:
         await connection.close()
+
+    # Serialize per-user slot checks on PostgreSQL. The lock is taken only
+    # after the bounded external health check, and is held through repository commit.
+    locked_user = db.query(User).filter_by(id=user.id).with_for_update().first()
+    if not locked_user or not locked_user.is_active or locked_user.is_banned or not locked_user.is_verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is unavailable")
+    existing = repository.list_for_user(user.id)
+    same_active_account = any(
+        row.account_reference == payload.account_reference and row.is_active
+        for row in existing
+    )
+    active_count = sum(1 for row in existing if row.is_active)
+    limit = _connection_limit(locked_user, db)
+    if limit <= 0 or (not same_active_account and active_count >= limit):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your subscription connection limit has been reached",
+        )
     try:
         row = repository.upsert_for_user(
             user.id,
@@ -118,7 +137,14 @@ async def bind_engine(
             engine_version=payload.engine_version,
         )
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Engine is already bound or the connection conflicts with an existing record",
+        ) from exc
     return _engine_out(row)
 
 

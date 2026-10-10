@@ -244,6 +244,7 @@ class GatewayManager:
         self.user_api_keys:     Dict[int, str] = {}
         self.user_gateway_ids:  Dict[int, str] = {}
         self.user_account_ids:  Dict[int, str] = {}
+        self._registration_inflight: set[int] = set()
 
         self._ready       = asyncio.Event()
         self._ready_error: Optional[str] = None
@@ -291,6 +292,52 @@ class GatewayManager:
 
     # ── User registration ─────────────────────────────────────────────────────
 
+    def _check_connection_entitlement(self, telegram_id: int) -> tuple[bool, str]:
+        """Fail closed on entitlement errors and enforce the currently supported one-account binding."""
+        from database.database import db_manager
+        from database.models import EngineInstance, User
+        from services.subscription import SubscriptionService
+
+        if telegram_id in self.user_account_ids:
+            return False, "One MT5 account is already connected; additional accounts are not supported yet"
+
+        db = None
+        try:
+            db = db_manager.get_session()
+            user = db.query(User).filter_by(telegram_id=telegram_id).first()
+            if user is None:
+                # First registration creates the local user only after the
+                # gateway succeeds; the product's unregistered/free default is one account.
+                return True, ""
+            if not user.is_active or user.is_banned:
+                return False, "This account is unavailable for gateway registration"
+
+            plan = SubscriptionService(db).get_user_plan(telegram_id)
+            limit = int(getattr(plan, "max_connections", 0) or 0)
+            if limit < 1:
+                return False, "The current plan does not allow gateway connections"
+
+            durable_instances = db.query(EngineInstance).filter_by(
+                user_id=user.id, is_active=True
+            ).count()
+            has_legacy_binding = bool(
+                user.gateway_user_id or user.gateway_account_id or user.gateway_api_key
+            )
+            if has_legacy_binding or durable_instances:
+                return False, "One MT5 account is already connected; additional accounts are not supported yet"
+            return True, ""
+        except Exception as exc:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logger.error("Gateway connection entitlement check failed (%s)", type(exc).__name__)
+            return False, "Unable to verify the plan or existing connections; please retry later"
+        finally:
+            if db is not None:
+                db.close()
+
     async def register_user(
         self,
         telegram_id: int,
@@ -303,22 +350,14 @@ class GatewayManager:
         Returns (success, message, credentials_dict).
         credentials_dict contains: tonpo_user_id, tonpo_api_key, tonpo_account_id
         """
+        if telegram_id in self._registration_inflight:
+            return False, "An MT5 registration is already in progress", {}
+        # This check-and-set has no await and is atomic within the single bot event loop.
+        self._registration_inflight.add(telegram_id)
         try:
-            # Subscription / connection-limit check
-            try:
-                from services.subscription import SubscriptionService
-                from database.database import db_manager
-                sub_service = SubscriptionService(db_manager.get_session())
-                plan = sub_service.get_user_plan(telegram_id)
-                current = sum(1 for uid in self.user_clients if uid == telegram_id)
-                if plan and plan.max_connections and current >= plan.max_connections:
-                    return (
-                        False,
-                        f"Connection limit reached ({plan.max_connections} for {plan.tier} plan)",
-                        {},
-                    )
-            except Exception as exc:
-                logger.warning('Could not check connection limit (%s)', type(exc).__name__)
+            allowed, entitlement_error = self._check_connection_entitlement(telegram_id)
+            if not allowed:
+                return False, entitlement_error, {}
 
             # Step 1: create a gateway user (no auth required)
             async with TonpoClient.admin(self.gateway_config) as client:
@@ -380,6 +419,8 @@ class GatewayManager:
             self.user_api_keys.pop(telegram_id, None)
             self.user_gateway_ids.pop(telegram_id, None)
             return False, "Tonpo registration failed", {}
+        finally:
+            self._registration_inflight.discard(telegram_id)
 
     # ── Connection access ─────────────────────────────────────────────────────
 

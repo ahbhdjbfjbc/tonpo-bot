@@ -25,7 +25,8 @@ router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 _RATE_LIMIT = 30
 _RATE_WINDOW = 60
-_MAX_TIMESTAMP_SKEW = 300
+_DEFAULT_MAX_TIMESTAMP_AGE_SECONDS = 300
+_DEFAULT_MAX_FUTURE_SIGNAL_SKEW_SECONDS = 30
 _webhook_cache: CacheService | None = None
 
 
@@ -82,7 +83,12 @@ def _timestamp(value: Any) -> float:
         raise HTTPException(status_code=400, detail="Invalid timestamp")
     if result > 1e12:
         result /= 1000.0
-    if abs(time.time() - result) > _MAX_TIMESTAMP_SKEW:
+    now = time.time()
+    max_age = float(getattr(settings, "MAX_SIGNAL_AGE_SECONDS", _DEFAULT_MAX_TIMESTAMP_AGE_SECONDS))
+    max_future = float(getattr(
+        settings, "MAX_FUTURE_SIGNAL_SKEW_SECONDS", _DEFAULT_MAX_FUTURE_SIGNAL_SKEW_SECONDS
+    ))
+    if result < now - max_age or result > now + max_future:
         raise HTTPException(status_code=400, detail="Timestamp outside allowed window")
     return result
 
@@ -136,6 +142,8 @@ def _public_error(result: dict[str, Any]) -> Optional[str]:
     status_name = str(result.get("status") or "")
     known = {
         "invalid": "Signal validation failed",
+        "stale_signal": "Signal is older than the configured acceptance window",
+        "future_signal": "Signal timestamp is too far in the future",
         "unauthorized": "Trading account is unavailable",
         "rejected_subscription": "Subscription or feature access is unavailable",
         "subscription_required": "Subscription or feature access is unavailable",

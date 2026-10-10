@@ -19,7 +19,9 @@ class QueueService:
     
     def __init__(self):
         redis_url = settings.REDIS_URL
-        self.enabled = bool(redis_url)
+        # No Celery worker/beat is deployed and several task handlers remain
+        # intentionally incomplete. A Redis URL alone must never imply support.
+        self.enabled = False
         self.celery_app = Celery(
             'fx_signal_copier',
             # Celery treats a missing broker as its default AMQP broker. Keep
@@ -48,7 +50,7 @@ class QueueService:
         # Register tasks
         self._register_tasks()
         
-        logger.info("Queue service initialized")
+        logger.warning("Celery queue is disabled until production task handlers and a worker are deployed")
     
     def _register_tasks(self):
         """Register all background tasks"""
@@ -56,21 +58,17 @@ class QueueService:
         @self.celery_app.task(bind=True, name='tasks.send_notification')
         def send_notification(self, user_id: int, message: str, notification_type: str):
             """Send notification to user"""
-            # This will be called from the bot
-            from services.notification import NotificationService
-            # Implementation in bot layer
-            pass
+            raise NotImplementedError("Celery notifications are disabled until a worker adapter is deployed")
         
         @self.celery_app.task(bind=True, name='tasks.process_signal')
         def process_signal(self, user_id: int, signal_text: str):
             """Process a trading signal"""
-            # This will be handled by trade executor
-            pass
+            raise NotImplementedError("Signal processing must use the authenticated SignalPipeline")
         
         @self.celery_app.task(bind=True, name='tasks.generate_report')
         def generate_report(self, user_id: int, report_type: str):
             """Generate and send a report"""
-            pass
+            raise NotImplementedError("Report generation is not implemented")
         
         @self.celery_app.task(bind=True, name='tasks.cleanup_old_data')
         def cleanup_old_data(self, days: int = 30):
@@ -81,12 +79,12 @@ class QueueService:
         @self.celery_app.task(bind=True, name='tasks.check_connections')
         def check_connections(self):
             """Check all user connections"""
-            pass
+            raise NotImplementedError("Connection monitor task is not implemented")
         
         @self.celery_app.task(bind=True, name='tasks.update_prices')
         def update_prices(self, symbols: list):
             """Update price cache for symbols"""
-            pass
+            raise NotImplementedError("Price update task is not implemented")
     
     def send_task(self, task_name: str, args: list = None, 
                   kwargs: dict = None, delay: Optional[timedelta] = None) -> str:
@@ -94,31 +92,9 @@ class QueueService:
         Send a task to the queue
         Returns task ID
         """
-        if not self.enabled:
-            raise RuntimeError("Task queue is disabled: configure REDIS_URL to enable it")
-        try:
-            if delay:
-                # Schedule for later
-                result = self.celery_app.send_task(
-                    task_name,
-                    args=args or [],
-                    kwargs=kwargs or {},
-                    countdown=int(delay.total_seconds())
-                )
-            else:
-                # Execute now
-                result = self.celery_app.send_task(
-                    task_name,
-                    args=args or [],
-                    kwargs=kwargs or {}
-                )
-            
-            logger.info(f"Task {task_name} sent with ID {result.id}")
-            return result.id
-            
-        except Exception as e:
-            logger.error("Failed to send task %s (%s)", task_name, type(e).__name__)
-            raise
+        raise RuntimeError(
+            "Celery task queue is not production-ready; task submission is disabled until handlers and a worker are deployed"
+        )
     
     def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Get task result by ID"""
