@@ -102,6 +102,7 @@ class User(Base):
     trades = relationship("Trade", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     connection_logs = relationship("ConnectionLog", back_populates="user", cascade="all, delete-orphan")
+    engine_instances = relationship("EngineInstance", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     
     # Indexes
@@ -246,7 +247,7 @@ class Trade(Base):
     # Execution details
     mt_order_ids = Column(JSON, default=list)  # Array of MetaTrader order IDs
     execution_results = Column(JSON, default=list, server_default='[]', nullable=False)
-    STATUSES = ['pending', 'executed', 'partial', 'unknown', 'failed', 'cancelled']
+    STATUSES = ['pending', 'executed', 'partial', 'unknown', 'failed', 'cancelled', 'closed']
     status = Column(String(20), default='pending', nullable=False, index=True)
     error_message = Column(Text, nullable=True)
     
@@ -313,6 +314,64 @@ class ConnectionLog(Base):
     
     __table_args__ = (
         Index('idx_connection_user_date', 'user_id', 'created_at'),
+    )
+
+
+class EngineInstance(Base):
+    """Durable one-user-to-one-MT5-engine binding.
+
+    The API key is encrypted with the existing Fernet credential service. The
+    table stores an account reference, never an MT5 password.
+    """
+    __tablename__ = 'engine_instances'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    engine_instance_id = Column(String(128), nullable=False, unique=True)
+    provider = Column(String(32), nullable=False, default='metadocker', server_default='metadocker')
+    endpoint = Column(String(255), nullable=False)
+    account_reference = Column(String(100), nullable=False)
+    api_key_ciphertext = Column(Text, nullable=False)
+    engine_version = Column(String(64), nullable=True)
+    status = Column(String(24), nullable=False, default='unknown', server_default='unknown')
+    provision_status = Column(String(24), nullable=False, default='active', server_default='active')
+    last_health_at = Column(DateTime, nullable=True)
+    last_session = Column(Integer, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default='true')
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    user = relationship("User", back_populates="engine_instances")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'account_reference', name='uq_engine_user_account'),
+        Index('idx_engine_user_active', 'user_id', 'is_active'),
+    )
+
+
+class TradeChannelPublication(Base):
+    """Durable outbox state for the central executed-trades channel."""
+    __tablename__ = 'trade_channel_publications'
+
+    id = Column(Integer, primary_key=True)
+    signal_receipt_id = Column(Integer, ForeignKey('signal_receipts.id', ondelete='CASCADE'), nullable=False, unique=True)
+    trade_uuid = Column(String(36), nullable=True, index=True)
+    symbol = Column(String(32), nullable=False)
+    order_type = Column(String(32), nullable=False)
+    position_size = Column(Float, nullable=True)
+    entry_price = Column(Numeric(20, 5), nullable=True)
+    stop_loss = Column(Numeric(20, 5), nullable=True)
+    take_profits = Column(JSON, nullable=True)
+    status = Column(String(20), nullable=False, default='pending', server_default='pending')
+    telegram_message_id = Column(BigInteger, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0, server_default='0')
+    last_error = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    published_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_trade_publication_status', 'status', 'created_at'),
     )
 
 

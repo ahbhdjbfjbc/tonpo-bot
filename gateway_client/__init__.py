@@ -15,6 +15,7 @@ from .adapter import (
     GatewayManager,
     ExecutionProvider,
 )
+from .metadocker import MetaDockerConnectionAdapter, MetaDockerExecutionProvider
 
 # GatewayConfig comes directly from the SDK — re-export so callers that do
 #   from gateway_client import GatewayConfig
@@ -27,5 +28,7 @@ __all__ = [
     "TonpoConnectionAdapter",
     "GatewayManager",
     "ExecutionProvider",
+    "MetaDockerConnectionAdapter",
+    "MetaDockerExecutionProvider",
     "TonpoConfig",
 ]

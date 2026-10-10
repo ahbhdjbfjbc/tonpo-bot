@@ -212,9 +212,6 @@ class SubscriptionService:
         old_plan = user.subscription_tier
         user.subscription_tier = 'free'
         user.subscription_expiry = None
-        
-        self.db.commit()
-        
         referral_attribution = (user.subscription_features or {}).get('referral_attribution')
         user.subscription_features = {
             'max_trades': 10,
@@ -228,6 +225,8 @@ class SubscriptionService:
         }
         if referral_attribution:
             user.subscription_features['referral_attribution'] = referral_attribution
+
+        self.db.commit()
         
         logger.info(f"User {user_id} downgraded from {old_plan} to free: {reason}")
         

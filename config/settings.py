@@ -57,6 +57,11 @@ class Settings(BaseSettings):
         validation_alias="GATEWAY_REQUEST_TIMEOUT",
         gt=0
     )
+    ENGINE_PROVIDER: str = Field('tonpo', validation_alias='ENGINE_PROVIDER')
+    METADOCKER_REQUEST_TIMEOUT: float = Field(15.0, validation_alias='METADOCKER_REQUEST_TIMEOUT', gt=0, le=120)
+    METADOCKER_MAX_TICK_AGE_SECONDS: float = Field(10.0, validation_alias='METADOCKER_MAX_TICK_AGE_SECONDS', gt=0, le=300)
+    METADOCKER_ALLOWED_HOSTS: str = Field('', validation_alias='METADOCKER_ALLOWED_HOSTS')
+    METADOCKER_REQUIRE_HTTPS: bool = Field(True, validation_alias='METADOCKER_REQUIRE_HTTPS')
     
     @property
     def gateway_config(self):
@@ -300,6 +305,10 @@ class Settings(BaseSettings):
     TRADINGVIEW_WEBHOOK_SECRET: Optional[str] = Field(None, validation_alias='TRADINGVIEW_WEBHOOK_SECRET')
     # A webhook secret is bound to one configured Telegram account; identity is never accepted from payloads.
     TRADINGVIEW_TELEGRAM_ID: Optional[int] = Field(None, validation_alias='TRADINGVIEW_TELEGRAM_ID')
+    # When enabled, a validated TradingView signal is fanned out to active paid/trial users.
+    TRADINGVIEW_BROADCAST_TO_SUBSCRIBERS: bool = Field(False, validation_alias='TRADINGVIEW_BROADCAST_TO_SUBSCRIBERS')
+    # Optional second Telegram channel for public execution summaries.
+    TRADE_RESULTS_CHANNEL_ID: Optional[int] = Field(None, validation_alias='TRADE_RESULTS_CHANNEL_ID')
     TRADINGVIEW_SYMBOL_MAP: Dict[str, str] = Field(default={}, validation_alias='TRADINGVIEW_SYMBOL_MAP')
     TELEGRAM_SIGNAL_CHANNEL_IDS: List[int] = Field(default=[], validation_alias='TELEGRAM_SIGNAL_CHANNEL_IDS')
     TRADINGVIEW_WEBHOOK_HOST: str = Field('0.0.0.0', validation_alias='TRADINGVIEW_WEBHOOK_HOST')

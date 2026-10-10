@@ -2,11 +2,14 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import asyncio
+from html import escape
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import IntegrityError
 
 from database.repositories import NotificationRepository, UserRepository
-from database.models import Notification, User
+from database.models import Notification, TradeChannelPublication, User
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -135,6 +138,9 @@ class NotificationService:
     
     async def notify_trade_executed(self, user_id: int, trade_data: Dict[str, Any]):
         """Notify user about successful trade execution"""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if user and user.settings and not getattr(user.settings, "notify_on_trade", True):
+            return
         template = self.templates['trade_executed']
         message = template.format(
             order_type=trade_data['order_type'],
@@ -157,8 +163,133 @@ class NotificationService:
             data=trade_data
         )
     
+    async def publish_trade_execution(self, signal_receipt_id: int, result: Dict[str, Any]) -> bool:
+        """Publish one executed trade to the configured second channel.
+
+        A durable outbox row is marked ``publishing`` before Telegram is called;
+        failed rows can be retried while a concurrent duplicate is skipped.
+        User identity and account credentials are never included publicly.
+        """
+        channel_id = getattr(settings, "TRADE_RESULTS_CHANNEL_ID", None)
+        if not channel_id:
+            return False
+
+        signal = result.get("signal") or {}
+        calculated = result.get("calculated") or {}
+        row = self.db.query(TradeChannelPublication).filter_by(
+            signal_receipt_id=signal_receipt_id
+        ).first()
+        if row and row.status == "published":
+            return True
+        if row and row.status == "publishing":
+            last_update = row.updated_at or row.created_at
+            if not last_update or last_update >= datetime.utcnow() - timedelta(minutes=5):
+                return False
+        if row is None:
+            row = TradeChannelPublication(
+                signal_receipt_id=signal_receipt_id,
+                trade_uuid=result.get("trade_id"),
+                symbol=str(signal.get("symbol") or "UNKNOWN")[:32],
+                order_type=str(signal.get("order_type") or "UNKNOWN")[:32],
+                position_size=calculated.get("position_size"),
+                entry_price=signal.get("entry"),
+                stop_loss=signal.get("stop_loss"),
+                take_profits=signal.get("take_profits") or [],
+                status="publishing",
+            )
+            self.db.add(row)
+        else:
+            row.status = "publishing"
+            row.last_error = None
+        row.attempts = int(row.attempts or 0) + 1
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            existing = self.db.query(TradeChannelPublication).filter_by(
+                signal_receipt_id=signal_receipt_id
+            ).first()
+            return bool(existing and existing.status == "published")
+
+        if not self.bot:
+            row.status = "failed"
+            row.last_error = "telegram_bot_unavailable"
+            self.db.commit()
+            logger.warning("Trade channel publication queued: Telegram bot is unavailable")
+            return False
+
+        tps = ", ".join(str(value) for value in (signal.get("take_profits") or []))
+        message = (
+            "<b>✅ تنفيذ صفقة</b>\n\n"
+            f"<b>{escape(str(signal.get('order_type') or 'UNKNOWN'))} "
+            f"{escape(str(signal.get('symbol') or 'UNKNOWN'))}</b>\n"
+            f"الحجم: <code>{escape(str(calculated.get('position_size') or '-'))}</code>\n"
+            f"الدخول: <code>{escape(str(signal.get('entry') or 'MARKET'))}</code>\n"
+            f"وقف الخسارة: <code>{escape(str(signal.get('stop_loss') or '-'))}</code>\n"
+            f"الأهداف: <code>{escape(tps or '-')}</code>"
+        )
+        try:
+            sent = await self.bot.send_message(
+                chat_id=int(channel_id), text=message, parse_mode="HTML"
+            )
+            row.status = "published"
+            row.telegram_message_id = getattr(sent, "message_id", None)
+            row.published_at = datetime.utcnow()
+            row.last_error = None
+            self.db.commit()
+            return True
+        except Exception as exc:
+            self.db.rollback()
+            row = self.db.query(TradeChannelPublication).filter_by(
+                signal_receipt_id=signal_receipt_id
+            ).first()
+            if row:
+                row.status = "failed"
+                row.last_error = type(exc).__name__[:255]
+                self.db.commit()
+            logger.error("Trade channel publication failed (%s)", type(exc).__name__)
+            return False
+
+    async def retry_trade_channel_publications(self, *, max_attempts: int = 5) -> int:
+        """Retry failed or stale publications from the durable outbox."""
+        if not getattr(settings, "TRADE_RESULTS_CHANNEL_ID", None) or not self.bot:
+            return 0
+        stale_before = datetime.utcnow() - timedelta(minutes=5)
+        rows = self.db.query(TradeChannelPublication).filter(
+            TradeChannelPublication.attempts < max_attempts,
+            or_(
+                TradeChannelPublication.status == "failed",
+                and_(
+                    TradeChannelPublication.status == "publishing",
+                    func.coalesce(
+                        TradeChannelPublication.updated_at,
+                        TradeChannelPublication.created_at,
+                    ) < stale_before,
+                ),
+            ),
+        ).order_by(TradeChannelPublication.created_at.asc()).limit(50).all()
+        published = 0
+        for row in rows:
+            result = {
+                "trade_id": row.trade_uuid,
+                "signal": {
+                    "symbol": row.symbol,
+                    "order_type": row.order_type,
+                    "entry": row.entry_price,
+                    "stop_loss": row.stop_loss,
+                    "take_profits": row.take_profits or [],
+                },
+                "calculated": {"position_size": row.position_size},
+            }
+            if await self.publish_trade_execution(row.signal_receipt_id, result):
+                published += 1
+        return published
+
     async def notify_trade_failed(self, user_id: int, error: str, trade_data: Dict[str, Any]):
         """Notify user about trade failure"""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        if user and user.settings and not getattr(user.settings, "notify_on_error", True):
+            return
         template = self.templates['trade_failed']
         message = template.format(
             symbol=trade_data.get('symbol', 'Unknown'),

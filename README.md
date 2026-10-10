@@ -64,7 +64,7 @@ This bot uses the **[Tonpo SDK](https://github.com/TonpoLabs/tonpo-py)** to comm
 
 ### Requirements
 
-- **Python 3.12+**
+- **Python 3.12+** (canonical container/runtime: Python 3.12; see `.python-version`)
 - **PostgreSQL 16** — for users, trades, subscriptions, audit logs
 - **Redis 7** — for caching and rate limiting
 - **Telegram Bot Token** — get one from [@BotFather](https://t.me/BotFather)
@@ -115,6 +115,9 @@ GATEWAY_USE_SSL=true
 ```
 
 ### 3. Create Database
+
+The supported local database is PostgreSQL 16. Docker Compose uses the same version and defaults to database `tonpo_bot` and user `tonpo`.
+Set `POSTGRES_PASSWORD` in `.env` before running Compose. Compose injects the internal `postgres` service hostname into the bot and web containers; the `localhost` URL in `.env.example` is for non-containerized local execution.
 
 ```bash
 sudo -u postgres psql -c "CREATE USER tonpo WITH PASSWORD 'yourpassword';"

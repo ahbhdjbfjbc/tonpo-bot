@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database.models import User
 from services.ai_assistant import answer, quick_actions
-from web.deps import get_current_user, get_db, get_optional_user
+from web.deps import get_db, get_optional_user, get_optional_user_strict
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 
@@ -53,7 +53,7 @@ def get_quick_actions(
 @router.post("/chat", response_model=ChatOut)
 def chat(
     body: ChatIn,
-    user: User = Depends(get_current_user),
+    user: Optional[User] = Depends(get_optional_user_strict),
     db: Session = Depends(get_db),
 ):
     result = answer(body.message, lang=body.language, db=db, user=user)

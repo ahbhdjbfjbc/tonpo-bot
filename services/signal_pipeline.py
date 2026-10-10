@@ -211,6 +211,26 @@ class SignalPipeline:
             receipt.rejection_reason = 'Trading mode is invalid'
             self.db.commit()
             return {'success': False, 'status': 'rejected_mode', 'error': 'Invalid trade mode'}
+        if not bool(getattr(settings, 'TRADING_DRY_RUN', True)) and (user.trading_mode or 'demo') != 'live':
+            receipt.status = 'rejected_account_mode'
+            receipt.rejection_reason = 'Live broker execution requires the user account to be in live mode'
+            self.db.commit()
+            return {
+                'success': False,
+                'status': 'account_mode_blocked',
+                'error': 'Live execution requires the account trading mode to be live',
+                'receipt_id': receipt.id,
+            }
+        if mode == 'auto' and not bool(getattr(settings, 'ENABLE_AUTO_TRADING', True)):
+            receipt.status = 'rejected_auto_trading_disabled'
+            receipt.rejection_reason = 'Automatic trading is disabled by server policy'
+            self.db.commit()
+            return {
+                'success': False,
+                'status': 'auto_trading_disabled',
+                'error': 'Automatic trading is disabled by server policy',
+                'receipt_id': receipt.id,
+            }
         if envelope.source != 'manual' and mode == 'manual' and not confirmed:
             receipt.status = 'manual_review'
             self.db.commit()
@@ -268,6 +288,8 @@ class SignalPipeline:
             self.db.commit()
             event = 'signal_executed' if result.get('success') else 'execution_unknown' if result.get('status') == 'unknown' else 'execution_failed'
             await self.notifications.notify_event(envelope.user_id, event, title='Signal decision', message=str(result.get('error') or result.get('status') or 'Execution result'), data={'signal_id': receipt.signal_id, 'status': receipt.status}, event_key=f'signal:{receipt.id}:result')
+            if result.get('success') and result.get('status') == 'executed' and not getattr(settings, 'TRADING_DRY_RUN', True):
+                await self.notifications.publish_trade_execution(receipt.id, result)
             return result
         except Exception as exc:
             self.db.rollback()

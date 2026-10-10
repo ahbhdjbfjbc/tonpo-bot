@@ -380,10 +380,28 @@ class TradingHandler:
             
             # Update calculation with new risk
             calculation = context.user_data.get('calculation')
-            if calculation:
-                # Recalculate with new risk
-                # This would need to call risk service again
-                pass
+            if not calculation or not context.user_data.get('signal_text'):
+                raise ValueError
+
+            user = self.user_repo.get_by_telegram_id(update.effective_user.id)
+            if not user:
+                raise ValueError
+            previous_risk = user.default_risk_factor
+            try:
+                # calculate_only reads the user's risk factor but does not
+                # commit it; restore the persisted preference after preview.
+                user.default_risk_factor = risk_factor
+                recalculated = await self.trade_executor.calculate_only(
+                    update.effective_user.id,
+                    context.user_data['signal_text'],
+                )
+            finally:
+                user.default_risk_factor = previous_risk
+                self.db.rollback()
+            if not recalculated.get('success'):
+                raise ValueError
+            calculation = recalculated
+            context.user_data['calculation'] = calculation
             
             # Show updated calculation
             from bot.keyboards import get_trade_confirmation_keyboard

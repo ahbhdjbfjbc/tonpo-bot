@@ -720,8 +720,11 @@ class PaymentService:
             raise ValueError("Payment plan is unavailable")
         old_value = {"status": payment.status, "subscription_tier": user.subscription_tier}
         duration = 365 if payment.billing_period == "yearly" else 30
+        now = datetime.utcnow()
+        current_expiry = user.subscription_expiry
+        extension_start = max(now, current_expiry) if current_expiry else now
         user.subscription_tier = payment.plan_tier
-        user.subscription_expiry = datetime.utcnow() + timedelta(days=duration)
+        user.subscription_expiry = extension_start + timedelta(days=duration)
         user.subscription_features = {
             "max_trades": plan.max_trades_per_day,
             "max_position_size": float(plan.max_position_size),

@@ -17,13 +17,18 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
+import redis
+from services.cache import CacheService, RateLimitUnavailable
 
 from web.cors import LOCAL_DEVELOPMENT_ORIGINS, resolve_cors_origins
 
 from config.settings import settings
+from database.database import db_manager
 from web.runtime import initialize_web_execution_provider, shutdown_web_execution_provider
 
 logger = logging.getLogger(__name__)
+_login_rate_limiter = None
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -74,7 +79,37 @@ async def safe_request_diagnostics(request: Request, call_next):
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
+    if request.url.path == "/api/auth/login" and body and getattr(settings, "REDIS_URL", None):
+        try:
+            payload = json.loads(body)
+            telegram_id = payload.get("telegram_id") if isinstance(payload, dict) else None
+            if telegram_id is not None:
+                global _login_rate_limiter
+                if _login_rate_limiter is None:
+                    _login_rate_limiter = CacheService()
+                allowed, retry_after = _login_rate_limiter.check_rate_limit(
+                    f"ratelimit:web-login:{request.client.host if request.client else 'unknown'}:{telegram_id}",
+                    10,
+                    60,
+                )
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "Too many login attempts"},
+                        headers={"Retry-After": str(max(1, retry_after))},
+                    )
+        except RateLimitUnavailable:
+            return JSONResponse(status_code=503, content={"detail": "Login temporarily unavailable"})
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
     response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     if request.url.path == "/" or request.url.path == "/static/js/app.js":
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -140,7 +175,51 @@ def health():
         "status": "ok",
         "service": "tonpo-web",
         "dry_run": bool(getattr(settings, "TRADING_DRY_RUN", True)),
+        "readiness_endpoint": "/api/ready",
     }
+
+
+@app.get("/api/live")
+def live():
+    """Process liveness; deliberately does not claim dependency readiness."""
+    return {"status": "alive", "service": "tonpo-web"}
+
+
+@app.get("/api/ready")
+def ready():
+    """Readiness gate for orchestration and traffic routing."""
+    checks = {"database": "not_checked", "schema": "not_checked", "redis": "not_checked"}
+    try:
+        if not getattr(db_manager, "_initialized", False):
+            db_manager.initialize(getattr(settings, "DATABASE_URL", None))
+        session = db_manager.get_session()
+        try:
+            session.execute(text("SELECT 1"))
+            checks["database"] = "ok"
+            version = session.execute(text("SELECT version_num FROM alembic_version")).first()
+            if version and version[0]:
+                checks["schema"] = str(version[0])
+        finally:
+            session.close()
+    except Exception:
+        checks["database"] = "unavailable"
+        checks["schema"] = "unavailable"
+
+    redis_url = getattr(settings, "REDIS_URL", None)
+    if redis_url:
+        try:
+            client = redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
+            client.ping()
+            checks["redis"] = "ok"
+        except Exception:
+            checks["redis"] = "unavailable"
+    else:
+        checks["redis"] = "not_configured"
+
+    ready_state = checks["database"] == "ok" and checks["schema"] not in {"not_checked", "unavailable"}
+    ready_state = ready_state and checks["redis"] == "ok"
+    payload = {"status": "ready" if ready_state else "not_ready", "service": "tonpo-web", "checks": checks}
+    return JSONResponse(status_code=200 if ready_state else 503, content=payload)
 
 
 @app.exception_handler(Exception)

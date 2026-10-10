@@ -5,17 +5,17 @@
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-fx_signal_copier}
-      POSTGRES_USER: ${POSTGRES_USER:-fxuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-tonpo_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-tonpo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fxuser}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tonpo} -d ${POSTGRES_DB:-tonpo_bot}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,7 +24,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -34,12 +34,25 @@ services:
       retries: 5
     restart: unless-stopped
 
+  tonpo-migrate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://tonpo:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+
   tonpo-bot:
     build: .
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://tonpo:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       TRADING_DRY_RUN: ${TRADING_DRY_RUN:-true}
       PYTHONPATH: /app
@@ -48,6 +61,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      tonpo-migrate:
+        condition: service_completed_successfully
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
@@ -58,7 +73,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://tonpo:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tonpo_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       TRADING_DRY_RUN: ${TRADING_DRY_RUN:-true}
       WEB_HOST: 0.0.0.0
@@ -67,13 +82,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      tonpo-migrate:
+        condition: service_completed_successfully
     ports:
       - "${WEB_PORT:-8000}:8000"
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready')"]
       interval: 15s
       timeout: 5s
       retries: 5

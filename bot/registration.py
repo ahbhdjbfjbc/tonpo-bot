@@ -39,6 +39,12 @@ class RegistrationHandler:
     async def start(self, update: Update, context: CallbackContext) -> int:
         """Start the registration process"""
         user = update.effective_user
+        if str(getattr(settings, "ENGINE_PROVIDER", "tonpo")).lower() == "metadocker":
+            await update.message.reply_text(
+                "ربط MetaDocker لا يستخدم نموذج كلمة مرور MT5 القديم. "
+                "افتح لوحة الويب واربط EngineInstance من صفحة MT5، ثم عد إلى البوت للتحقق من الاتصال."
+            )
+            return ConversationHandler.END
         if not hasattr(self, '_pending_passwords'):
             self._pending_passwords = {}
         self._pending_passwords.pop(user.id, None)

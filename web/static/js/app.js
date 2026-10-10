@@ -179,7 +179,7 @@
       unauthorized: 'badge-red', duplicate: 'badge-gray',
     };
     const cls = map[s] || 'badge-gray';
-    return `<span class="badge ${cls}">${s || '—'}</span>`;
+    return `<span class="badge ${cls}">${escapeHtml(s || '—')}</span>`;
   }
   function skeleton(rows = 4) {
     return Array.from({ length: rows }, () =>
@@ -340,14 +340,14 @@
       </tr></thead><tbody>`;
     for (const s of data.items) {
       html += `<tr class="cursor-pointer hover:bg-surface-700/40" onclick="location.hash='signal/${s.id}'">
-        <td class="mono font-medium text-white">${s.symbol || '—'}</td>
-        <td>${s.direction ? `<span class="badge ${s.direction.includes('BUY') || s.direction.includes('Buy') ? 'badge-green' : 'badge-red'}">${s.direction}</span>` : '—'}</td>
-        <td class="mono">${s.entry || '—'}</td>
-        <td class="mono">${s.stop_loss || '—'}</td>
-        <td class="mono text-xs">${(s.take_profits || []).join(', ') || '—'}</td>
-        <td class="text-xs">${s.source}</td>
+        <td class="mono font-medium text-white">${escapeHtml(s.symbol || '—')}</td>
+        <td>${s.direction ? `<span class="badge ${s.direction.includes('BUY') || s.direction.includes('Buy') ? 'badge-green' : 'badge-red'}">${escapeHtml(s.direction)}</span>` : '—'}</td>
+        <td class="mono">${escapeHtml(s.entry || '—')}</td>
+        <td class="mono">${escapeHtml(s.stop_loss || '—')}</td>
+        <td class="mono text-xs">${escapeHtml((s.take_profits || []).join(', ') || '—')}</td>
+        <td class="text-xs">${escapeHtml(s.source || '—')}</td>
         <td>${statusBadge(s.status)}</td>
-        <td class="text-xs text-slate-400">${s.rejection_reason || s.news_status || '—'}</td>
+        <td class="text-xs text-slate-400">${escapeHtml(s.rejection_reason || s.news_status || '—')}</td>
         <td class="text-slate-500 text-xs whitespace-nowrap">${s.created_at ? new Date(s.created_at).toLocaleString('ar') : '—'}</td>
       </tr>`;
     }
@@ -370,11 +370,11 @@
       </tr></thead><tbody>`;
     for (const t of data.items) {
       html += `<tr class="cursor-pointer hover:bg-surface-700/40" onclick="location.hash='trade/${t.id}'">
-        <td class="mono font-medium text-white">${t.symbol}</td>
-        <td>${t.order_type}</td>
-        <td class="mono">${t.entry_price ?? '—'}</td>
-        <td class="mono">${t.position_size ?? '—'}</td>
-        <td class="mono">${t.risk_percentage != null ? t.risk_percentage + '%' : '—'}</td>
+        <td class="mono font-medium text-white">${escapeHtml(t.symbol || '—')}</td>
+        <td>${escapeHtml(t.order_type || '—')}</td>
+        <td class="mono">${escapeHtml(t.entry_price ?? '—')}</td>
+        <td class="mono">${escapeHtml(t.position_size ?? '—')}</td>
+        <td class="mono">${escapeHtml(t.risk_percentage != null ? t.risk_percentage + '%' : '—')}</td>
         <td>${statusBadge(t.status)}</td>
         <td class="text-slate-500 text-xs whitespace-nowrap">${t.created_at ? new Date(t.created_at).toLocaleString('ar') : '—'}</td>
       </tr>`;
@@ -393,9 +393,9 @@
     const cards = [['الصفقات المغلقة', m.total_closed_trades], ['الرابحة', m.winning_trades], ['الخاسرة', m.losing_trades], ['نسبة الفوز', m.win_rate == null ? null : m.win_rate + '%'], ['إجمالي P/L', m.total_pnl]];
     html += `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">${cards.map(([title,value]) => `<div class="card"><div class="card-title">${title}</div><div class="card-value text-base">${value == null ? '—' : title.includes('P/L') ? money(value) : value}</div></div>`).join('')}</div>`;
     const signals = data.signals || [];
-    html += `<div class="card !p-0 overflow-hidden mb-4"><div class="px-4 py-3 border-b border-surface-600"><span class="text-sm font-semibold text-white">Signal decisions</span></div>${signals.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الوقت</th><th>المصدر</th><th>الحالة</th><th>السبب</th><th>News</th><th>Execution</th></tr></thead><tbody>${signals.map(s => `<tr><td class="text-xs whitespace-nowrap">${s.created_at ? new Date(s.created_at).toLocaleString('ar') : '—'}</td><td>${s.source || '—'}</td><td>${statusBadge(s.status)}</td><td class="text-xs">${s.rejection_reason || (s.status === 'rejected' ? 'Unknown execution state' : '—')}</td><td>${s.news_status || '—'}</td><td>${s.trade_id ? 'trade record' : '—'}</td></tr>`).join('')}</tbody></table></div>` : empty('No signals yet')}</div>`;
+    html += `<div class="card !p-0 overflow-hidden mb-4"><div class="px-4 py-3 border-b border-surface-600"><span class="text-sm font-semibold text-white">Signal decisions</span></div>${signals.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الوقت</th><th>المصدر</th><th>الحالة</th><th>السبب</th><th>News</th><th>Execution</th></tr></thead><tbody>${signals.map(s => `<tr><td class="text-xs whitespace-nowrap">${s.created_at ? new Date(s.created_at).toLocaleString('ar') : '—'}</td><td>${escapeHtml(s.source || '—')}</td><td>${statusBadge(s.status)}</td><td class="text-xs">${escapeHtml(s.rejection_reason || (s.status === 'rejected' ? 'Unknown execution state' : '—'))}</td><td>${escapeHtml(s.news_status || '—')}</td><td>${s.trade_id ? 'trade record' : '—'}</td></tr>`).join('')}</tbody></table></div>` : empty('No signals yet')}</div>`;
     const trades = data.trades || [];
-    html += `<div class="card !p-0 overflow-hidden"><div class="px-4 py-3 border-b border-surface-600 text-sm font-semibold text-white">Closed trades</div>${trades.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الوقت</th><th>الرمز</th><th>الاتجاه</th><th>P/L</th><th>الحالة</th></tr></thead><tbody>${trades.map(t => `<tr><td class="text-xs">${t.closed_at ? new Date(t.closed_at).toLocaleString('ar') : '—'}</td><td class="mono">${t.symbol || '—'}</td><td>${t.order_type || '—'}</td><td class="mono ${plClass(t.profit_loss)}">${money(t.profit_loss)}</td><td>${statusBadge(t.status)}</td></tr>`).join('')}</tbody></table></div>` : empty('No trades yet — Approved signals will appear here when execution is enabled.')}</div>`;
+    html += `<div class="card !p-0 overflow-hidden"><div class="px-4 py-3 border-b border-surface-600 text-sm font-semibold text-white">Closed trades</div>${trades.length ? `<div class="table-wrap border-0 rounded-none"><table class="data"><thead><tr><th>الوقت</th><th>الرمز</th><th>الاتجاه</th><th>P/L</th><th>الحالة</th></tr></thead><tbody>${trades.map(t => `<tr><td class="text-xs">${t.closed_at ? new Date(t.closed_at).toLocaleString('ar') : '—'}</td><td class="mono">${escapeHtml(t.symbol || '—')}</td><td>${escapeHtml(t.order_type || '—')}</td><td class="mono ${plClass(t.profit_loss)}">${money(t.profit_loss)}</td><td>${statusBadge(t.status)}</td></tr>`).join('')}</tbody></table></div>` : empty('No trades yet — Approved signals will appear here when execution is enabled.')}</div>`;
     el.innerHTML = html;
   }
 

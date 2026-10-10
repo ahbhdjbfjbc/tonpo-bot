@@ -67,7 +67,7 @@ def _setup(db):
     user = UserRepository(db).create_user(
         telegram_id=910001, is_active=True, is_verified=True,
         subscription_tier="pro", subscription_expiry=datetime.utcnow() + timedelta(days=30),
-        trade_mode="auto",
+        trade_mode="auto", trading_mode="live",
     )
     db.add(SubscriptionPlan(
         name="Pro", tier="pro", price_monthly=1, price_yearly=10,

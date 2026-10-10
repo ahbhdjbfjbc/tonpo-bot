@@ -114,10 +114,14 @@ class ProtectionService:
                 if abs(float(ask) - float(bid)) > float(max_spread): return self._blocked("spread", "Spread exceeds the configured maximum")
             max_slippage = getattr(account_settings, "max_slippage", None)
             observed_slippage = metadata.get("slippage", metadata.get("observed_slippage"))
-            if max_slippage is not None and observed_slippage is not None and float(observed_slippage) > float(max_slippage): return self._blocked("slippage", "Slippage exceeds the configured maximum")
+            if max_slippage is not None:
+                if observed_slippage is None: return self._blocked("slippage_unavailable", "Slippage data unavailable; protection is fail-closed")
+                if float(observed_slippage) > float(max_slippage): return self._blocked("slippage", "Slippage exceeds the configured maximum")
             max_volatility = getattr(account_settings, "max_volatility", None)
             observed_volatility = metadata.get("volatility", metadata.get("observed_volatility"))
-            if max_volatility is not None and observed_volatility is not None and float(observed_volatility) > float(max_volatility): return self._blocked("volatility", "Volatility exceeds the configured maximum")
+            if max_volatility is not None:
+                if observed_volatility is None: return self._blocked("volatility_unavailable", "Volatility data unavailable; protection is fail-closed")
+                if float(observed_volatility) > float(max_volatility): return self._blocked("volatility", "Volatility exceeds the configured maximum")
             start, end = getattr(account_settings, "session_start_utc", None), getattr(account_settings, "session_end_utc", None)
             if start and end:
                 current = now.astimezone(timezone.utc).strftime("%H:%M")
@@ -130,7 +134,14 @@ class ProtectionService:
                 if pnl <= -abs(float(max_daily_loss)): return self._blocked("daily_loss", "Daily loss limit reached")
             max_losses = getattr(account_settings, "max_consecutive_losses", None)
             if max_losses is not None:
-                rows = self.db.query(Trade).filter(Trade.user_id == user.id, Trade.closed_at.isnot(None), Trade.profit_loss.isnot(None)).order_by(Trade.closed_at.desc()).limit(int(max_losses) + 1).all()
+                max_losses = int(max_losses)
+                if max_losses <= 0:
+                    raise ValueError("invalid consecutive loss limit")
+                rows = self.db.query(Trade).filter(
+                    Trade.user_id == user.id,
+                    Trade.closed_at.isnot(None),
+                    Trade.profit_loss.isnot(None),
+                ).order_by(Trade.closed_at.desc()).limit(max_losses + 1).all()
                 consecutive = 0
                 for trade in rows:
                     if float(trade.profit_loss) < 0: consecutive += 1

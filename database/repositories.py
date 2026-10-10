@@ -12,7 +12,7 @@ import logging
 from contextlib import contextmanager
 
 from .models import (
-    User, UserSettings, Trade, ConnectionLog, 
+    User, UserSettings, Trade, ConnectionLog, EngineInstance,
     Notification, SubscriptionPlan, ApiUsage
 )
 
@@ -186,6 +186,75 @@ class UserRepository(BaseRepository):
             User.subscription_tier == tier,
             User.is_active == True
         ).all()
+
+
+class EngineInstanceRepository(BaseRepository):
+    """Persistent ownership and lifecycle operations for MT5 engines."""
+
+    def list_for_user(self, user_id: int) -> List[EngineInstance]:
+        return self.session.query(EngineInstance).filter(
+            EngineInstance.user_id == user_id
+        ).order_by(EngineInstance.created_at.desc()).all()
+
+    def get_active_for_telegram_id(self, telegram_id: int) -> Optional[EngineInstance]:
+        return (
+            self.session.query(EngineInstance)
+            .join(User, EngineInstance.user_id == User.id)
+            .filter(User.telegram_id == telegram_id, EngineInstance.is_active.is_(True))
+            .order_by(EngineInstance.updated_at.desc())
+            .first()
+        )
+
+    def upsert_for_user(
+        self,
+        user_id: int,
+        *,
+        engine_instance_id: str,
+        endpoint: str,
+        account_reference: str,
+        api_key_ciphertext: str,
+        engine_version: Optional[str] = None,
+    ) -> EngineInstance:
+        owner = self.session.query(EngineInstance).filter_by(
+            engine_instance_id=engine_instance_id
+        ).first()
+        if owner is not None and owner.user_id != user_id:
+            raise ValueError("Engine is already bound to another user")
+
+        row = self.session.query(EngineInstance).filter_by(
+            user_id=user_id, account_reference=account_reference
+        ).first()
+        if row is None:
+            row = EngineInstance(
+                user_id=user_id,
+                engine_instance_id=engine_instance_id,
+                provider="metadocker",
+                status="unknown",
+                provision_status="active",
+                is_active=True,
+            )
+            self.session.add(row)
+        row.engine_instance_id = engine_instance_id
+        row.endpoint = endpoint
+        row.account_reference = account_reference
+        row.api_key_ciphertext = api_key_ciphertext
+        row.engine_version = engine_version
+        row.is_active = True
+        row.provision_status = "active"
+        self._safe_commit()
+        self.session.refresh(row)
+        return row
+
+    def disable_for_user(self, user_id: int, engine_instance_id: str) -> bool:
+        row = self.session.query(EngineInstance).filter_by(
+            user_id=user_id, engine_instance_id=engine_instance_id
+        ).first()
+        if row is None:
+            return False
+        row.is_active = False
+        row.provision_status = "disabled"
+        self._safe_commit()
+        return True
 
 
 class TradeRepository(BaseRepository):
