@@ -1,6 +1,7 @@
 # fx/bot/utils.py
 import re
 import html
+import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import humanize
@@ -107,20 +108,20 @@ def validate_trade_format(text: str) -> tuple[bool, Optional[str]]:
     if 'NOW' not in entry_line:
         try:
             float(entry_line.split()[-1])
-        except:
+        except Exception:
             return False, "Invalid entry price"
     
     # Check SL line
     try:
         float(lines[2].split()[-1])
-    except:
+    except Exception:
         return False, "Invalid stop loss"
     
     # Check TP lines
     for i, line in enumerate(lines[3:5], 1):
         try:
             float(line.split()[-1])
-        except:
+        except Exception:
             if i == 1:
                 return False, "At least one take profit required"
             # Second TP is optional
@@ -147,17 +148,17 @@ def truncate_text(text: str, max_length: int = 100) -> str:
     return text[:max_length-3] + "..."
 
 
-def safe_send_message(update: Update, text: str, **kwargs) -> None:
+async def safe_send_message(update: Update, text: str, **kwargs) -> None:
     """
     Safely send a message with error handling
     """
     try:
-        if update.callback_query:
-            update.callback_query.message.reply_text(text, **kwargs)
-        else:
-            update.message.reply_text(text, **kwargs)
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text(text, **kwargs)
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, **kwargs)
     except Exception as e:
-        logging.error(f"Failed to send message: {e}")
+        logging.getLogger(__name__).error("Failed to send message: %s", type(e).__name__)
 
 
 def get_user_language(update: Update, context: CallbackContext) -> str:
@@ -207,7 +208,7 @@ def localize_text(text_key: str, language: str, **kwargs) -> str:
     if kwargs:
         try:
             text = text.format(**kwargs)
-        except:
+        except Exception:
             pass
     
     return text

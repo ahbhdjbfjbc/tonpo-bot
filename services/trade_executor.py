@@ -736,7 +736,7 @@ class TradeExecutor:
                     take_profits=[float(tp) for tp in trade.take_profits]
                 )
                 signals.append(signal)
-            except:
+            except Exception:
                 continue
         
         return signals

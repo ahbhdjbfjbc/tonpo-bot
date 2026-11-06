@@ -40,16 +40,16 @@ class TradingHandler:
         self.active_trades = {}
         self.mt5_manager_ready = asyncio.Event()
         if execution_provider is not None:
-        	self.mt5_manager_ready.set()
-        	
+                self.mt5_manager_ready.set()
+                
     async def wait_for_mt5_manager(self, timeout: float = 30.0) -> bool:
-    	"""Wait for mt5_manager to be initialized"""
-    	try:
-    		await asyncio.wait_for(self.mt5_manager_ready.wait(), timeout=timeout)
-    		return True
-    	except asyncio.TimeoutError:
-    		return False
-    	
+        """Wait for mt5_manager to be initialized"""
+        try:
+                await asyncio.wait_for(self.mt5_manager_ready.wait(), timeout=timeout)
+                return True
+        except asyncio.TimeoutError:
+                return False
+        
     async def start_trade(self, update: Update, context: CallbackContext) -> int:
         """Start the trade placement flow"""
         user_id = update.effective_user.id
@@ -426,19 +426,19 @@ class TradingHandler:
         action = context.user_data.get('action')
         
         if self.execution_provider is None:
-        	await update.message.reply_text(
-        	    "❌ Trading system is still starting up. Please wait a moment and try again."
-        	)
-        	context.user_data.clear()
-        	return
+                await update.message.reply_text(
+                    "❌ Trading system is still starting up. Please wait a moment and try again."
+                )
+                context.user_data.clear()
+                return
         
         if not await self.wait_for_mt5_manager(timeout=30.0):
-        	await update.message.reply_text(
-        	    "❌ System is taking longer than expected to initialize.\n\n"
+                await update.message.reply_text(
+                    "❌ System is taking longer than expected to initialize.\n\n"
             "يرجى المحاولة بعد قليل. إذا استمرت المشكلة، تواصل مع الدعم."
-        	)
-        	context.user_data.clear()
-        	return
+                )
+                context.user_data.clear()
+                return
         
         try:
             connection = await self.execution_provider.get_connection(user_id)
@@ -465,22 +465,22 @@ class TradingHandler:
             logger.error("Action %s failed for user %s (%s)", action, user_id, type(exc).__name__)
             
             if "not registered" in str(exc).lower():
-            	await update.message.reply_text(
-            	    "❌ MT5 account not found. Please check your credentials in /settings"
-            	)
+                await update.message.reply_text(
+                    "❌ MT5 account not found. Please check your credentials in /settings"
+                )
             elif "not found" in str(exc).lower():
-            	await update.message.reply_text(
-            	    "❌ MT5 account not found. Please check your credentials in /settings"
-            	)
+                await update.message.reply_text(
+                    "❌ MT5 account not found. Please check your credentials in /settings"
+                )
             elif "timeout" in str(exc).lower():
-            	await update.message.reply_text(
-            	    "❌ Connection timeout. Please try again later."
-            	)
+                await update.message.reply_text(
+                    "❌ Connection timeout. Please try again later."
+                )
             else:
-            	await update.message.reply_text(
+                await update.message.reply_text(
                 f"❌ تعذر جلب {action}. يرجى المحاولة لاحقًا."
-            	)
-            	
+                )
+                
         context.user_data.clear()
     
     async def _edit_message(self, update: Update, context: CallbackContext, 
@@ -496,7 +496,7 @@ class TradingHandler:
                     text=text,
                     **kwargs
                 )
-            except:
+            except Exception:
                 # If edit fails, send new message
                 await context.bot.send_message(
                     chat_id=update.effective_user.id,

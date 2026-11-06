@@ -89,25 +89,25 @@ class SubscriptionService:
             free_plan = self.get_plan('free')
             
             if not free_plan:
-            	# Create default free plan if it doesn't exist
-            	from database.models import SubscriptionPlan
-            	free_plan = SubscriptionPlan(
-            	    tier='free',
-            	    name='Free',
-            	    price_monthly=0,
-            	    price_yearly=0,
-            	    max_trades_per_day=10,
-            	    max_position_size=1.0,
-            	    max_symbols=30,
-            	    supports_multiple_tps=False,
-            	    supports_auto_trading=False,
-            	    supports_api=False,
-            	    support_priority='low',
-            	    max_connections=1
-            	)
-            	self.db.add(free_plan)
-            	self.db.commit()
-            	
+                # Create default free plan if it doesn't exist
+                from database.models import SubscriptionPlan
+                free_plan = SubscriptionPlan(
+                    tier='free',
+                    name='Free',
+                    price_monthly=0,
+                    price_yearly=0,
+                    max_trades_per_day=10,
+                    max_position_size=1.0,
+                    max_symbols=30,
+                    supports_multiple_tps=False,
+                    supports_auto_trading=False,
+                    supports_api=False,
+                    support_priority='low',
+                    max_connections=1
+                )
+                self.db.add(free_plan)
+                self.db.commit()
+                
             # plan = self.get_plan('free')
             user.subscription_tier = 'free'
             self.db.commit()
@@ -245,21 +245,21 @@ class SubscriptionService:
         return True, "OK"
     
     def check_symbol_limit(self, user_id: int, current_symbols: int) -> Tuple[bool, str]:
-    	"""Check if user can subscribe to more symbols"""
-    	plan = self.get_user_plan(user_id)
-    	
-    	if plan.max_symbols == 0:
-    		# 0 = unlimited
-    		return True, "OK"
-    	
-    	if current_symbols >= plan.max_symbols:
-    		return False, (
-    		    f"Symbol limit reached ({plan.max_symbols} for {plan.tier} plan). "
-    		    "Upgrade to add more symbols."
-    		)
-    	return True, "OK"
+        """Check if user can subscribe to more symbols"""
+        plan = self.get_user_plan(user_id)
+        
+        if plan.max_symbols == 0:
+                # 0 = unlimited
+                return True, "OK"
+        
+        if current_symbols >= plan.max_symbols:
+                return False, (
+                    f"Symbol limit reached ({plan.max_symbols} for {plan.tier} plan). "
+                    "Upgrade to add more symbols."
+                )
+        return True, "OK"
                           
-    	
+        
     def check_feature_access(self, user_id: int, feature: str) -> bool:
         """Check if user has access to a specific feature"""
         plan = self.get_user_plan(user_id)
@@ -353,81 +353,81 @@ class SubscriptionService:
         ).all()
     
     def process_expired(self, notification_service=None) -> int:
-    	"""Process all expired subscriptions, downgrade to free, and notify users"""
-    	expired = self.get_expired()
-    	count = 0
-    	
-    	for user in expired:
-    		try:
-    			old_plan = user.subscription_tier
-    			self.downgrade_user(user.telegram_id, "expired")
-    			count += 1
-    			
-    			# Send notification if service is available
-    			if notification_service:
-    				import asyncio
-    				try:
-    					try:
-    						loop = asyncio.get_running_loop()
-    					except RuntimeError:
-    						loop = None
-    					if loop is not None:
-    						asyncio.ensure_future(
-    						    notification_service.send_telegram(
-    						        user.telegram_id,
-    						        notification_service.templates['subscription_expired'].format(
-    						            plan=old_plan
-    						        )
-    						    )
-    						)
-    					else:
-    						asyncio.run(
-    						    notification_service.send_telegram(
-    						        user.telegram_id,
-    						        notification_service.templates['subscription_expired'].format(
-    						            plan=old_plan
-    						        )
-    						    )
-    						)
-    				except Exception as notify_err:
-    					logger.error(f"Failed to notify user {user.telegram_id} of expiry: {notify_err}")
-    		except Exception as e:
+        """Process all expired subscriptions, downgrade to free, and notify users"""
+        expired = self.get_expired()
+        count = 0
+        
+        for user in expired:
+                try:
+                        old_plan = user.subscription_tier
+                        self.downgrade_user(user.telegram_id, "expired")
+                        count += 1
+                        
+                        # Send notification if service is available
+                        if notification_service:
+                                import asyncio
+                                try:
+                                        try:
+                                                loop = asyncio.get_running_loop()
+                                        except RuntimeError:
+                                                loop = None
+                                        if loop is not None:
+                                                asyncio.ensure_future(
+                                                    notification_service.send_telegram(
+                                                        user.telegram_id,
+                                                        notification_service.templates['subscription_expired'].format(
+                                                            plan=old_plan
+                                                        )
+                                                    )
+                                                )
+                                        else:
+                                                asyncio.run(
+                                                    notification_service.send_telegram(
+                                                        user.telegram_id,
+                                                        notification_service.templates['subscription_expired'].format(
+                                                            plan=old_plan
+                                                        )
+                                                    )
+                                                )
+                                except Exception as notify_err:
+                                        logger.error(f"Failed to notify user {user.telegram_id} of expiry: {notify_err}")
+                except Exception as e:
                     logger.error("Failed to downgrade user %s (%s)", user.telegram_id, type(e).__name__)
-    	
-    	return count
+        
+        return count
     
     def get_usage_stats(self, user_id: int) -> Dict[str, Any]:
-    	"""Get usage statistics for user"""
-    	user = self.user_repo.get_by_telegram_id(user_id)
-    	
-    	if not user:
-    		raise SubscriptionError("User not found")
-    	
-    	plan = self.get_user_plan(user_id)
-    	
-    	if plan is None:
-    		# Log this unexpected situation
-    		logger.error(f"User {user_id} has no valid plan, using default stats")
-    		
-    		return {
-    		    'plan': 'unknown',
-    		    'expiry': None,
-    		    'trades_today': user.daily_trades,
-    		    'trade_limit': 0,
-    		    'trade_usage_percent': 0,
-    		    'total_trades': user.total_trades,
-    		    'total_volume': user.total_volume,
-    		    'features': {
-    		        'multiple_tps': False,
-    		        'auto_trading': False,
-    		        'api_access': False
-    		    }
-    		}
-    	
-    	# Calculate usage percentages
-    	trade_usage = (user.daily_trades / plan.max_trades_per_day * 100) if plan and plan.max_trades_per_day > 0 else 0
-    	
-    	return {
+        """Get usage statistics for user"""
+        user = self.user_repo.get_by_telegram_id(user_id)
+        
+        if not user:
+                raise SubscriptionError("User not found")
+        
+        plan = self.get_user_plan(user_id)
+        
+        if plan is None:
+                # Log this unexpected situation
+                logger.error(f"User {user_id} has no valid plan, using default stats")
+                
+                return {
+                    'plan': 'unknown',
+                    'expiry': None,
+                    'trades_today': user.daily_trades,
+                    'trade_limit': 0,
+                    'trade_usage_percent': 0,
+                    'total_trades': user.total_trades,
+                    'total_volume': user.total_volume,
+                    'features': {
+                        'multiple_tps': False,
+                        'auto_trading': False,
+                        'api_access': False
+                    }
+                }
+        
+        # Calculate usage percentages
+        trade_usage = (user.daily_trades / plan.max_trades_per_day * 100) if plan and plan.max_trades_per_day > 0 else 0
+        
+        return {
             'plan': plan.tier,
             'expiry': user.subscription_expiry.isoformat() if user.subscription_expiry else None,
             'trades_today': user.daily_trades,

@@ -1,4 +1,5 @@
 # fx/services/helpers.py
+import logging
 import re
 import secrets
 import string
@@ -95,18 +96,18 @@ def chunk_text(text: str, max_length: int = 4096) -> List[str]:
     return chunks
 
 
-def safe_send_message(update: Update, text: str, **kwargs) -> None:
+async def safe_send_message(update: Update, text: str, **kwargs) -> None:
     """
     Safely send a message with error handling
     """
     try:
-        if update.callback_query:
-            update.callback_query.message.reply_text(text, **kwargs)
-        else:
-            update.message.reply_text(text, **kwargs)
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text(text, **kwargs)
+        elif update.effective_message:
+            await update.effective_message.reply_text(text, **kwargs)
     except Exception as e:
         # Log error but don't raise
-        print(f"Failed to send message: {e}")
+        logging.getLogger(__name__).error("Failed to send message: %s", type(e).__name__)
 
 
 def get_user_language(update: Update, context: CallbackContext) -> str:
@@ -156,7 +157,7 @@ def localize_text(text_key: str, language: str, **kwargs) -> str:
     if kwargs:
         try:
             text = text.format(**kwargs)
-        except:
+        except Exception:
             pass
     
     return text

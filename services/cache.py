@@ -124,7 +124,7 @@ class CacheService:
             # Try pickle
             try:
                 return pickle.loads(data)
-            except:
+            except Exception:
                 return data.decode() if isinstance(data, bytes) else data
                 
         except RedisError as e:

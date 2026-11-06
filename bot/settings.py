@@ -367,7 +367,7 @@ class SettingsHandler:
                 risk = parse_risk_percent(text)
                 self.user_repo.update_user(user_id, default_risk_factor=risk)
                 await update.message.reply_text(f"✅ تم تحديث نسبة المخاطرة إلى {float(text):.1f}%")
-            except:
+            except Exception:
                 minimum, maximum = risk_limits_percent()
                 await update.message.reply_text(
                     f"❌ قيمة غير صالحة. أدخل رقمًا بين {minimum:g} و{maximum:g}."
@@ -382,7 +382,7 @@ class SettingsHandler:
                     await update.message.reply_text(f"✅ تم تحديث الحد الأقصى لحجم الصفقة إلى {size}")
                 else:
                     raise ValueError
-            except:
+            except Exception:
                 await update.message.reply_text("❌ قيمة غير صالحة. أدخل رقمًا بين 0.01 و100.")
                 return CONFIRM_UPDATE
         
@@ -396,7 +396,7 @@ class SettingsHandler:
                     await update.message.reply_text(f"✅ تم ضبط ساعة الإشعار على {hour}:00 UTC")
                 else:
                     raise ValueError
-            except:
+            except Exception:
                 await update.message.reply_text("❌ ساعة غير صالحة. أدخل رقمًا بين 0 و23.")
                 return CONFIRM_UPDATE
         

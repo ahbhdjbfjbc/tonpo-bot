@@ -152,12 +152,12 @@ class UserRepository(BaseRepository):
         ).limit(limit).all()
     
     def get_gateway_users(self) -> List[User]:
-    	"""Get all active users that have gateway credentials stored."""
-    	return self.session.query(User).filter(
-    	    User.is_active == True,
-    	    User.gateway_user_id.isnot(None),
-    	    User.gateway_api_key.isnot(None),
-    	).all()
+        """Get all active users that have gateway credentials stored."""
+        return self.session.query(User).filter(
+            User.is_active == True,
+            User.gateway_user_id.isnot(None),
+            User.gateway_api_key.isnot(None),
+        ).all()
     
     def get_users_needing_connection_check(self, minutes: int = 5) -> List[User]:
         """Get users whose connection hasn't been checked recently"""
@@ -440,14 +440,14 @@ class NotificationRepository(BaseRepository):
         from .models import User
         user_exists = self.session.query(User).filter(User.id == user_id).first()
         if not user_exists:
-        	# Try with telegram_id
-        	user_exists = self.session.query(User).filter(User.telegram_id == user_id).first()
-        	if user_exists:
-        		user_id = user_exists.id
-        	else:
-        		logger.warning(f"Cannot create notification: User {user_id} not found")
-        		return None
-        	
+                # Try with telegram_id
+                user_exists = self.session.query(User).filter(User.telegram_id == user_id).first()
+                if user_exists:
+                        user_id = user_exists.id
+                else:
+                        logger.warning(f"Cannot create notification: User {user_id} not found")
+                        return None
+                
         try:
             if event_key:
                 existing = self.session.query(Notification).filter_by(user_id=user_id, event_key=event_key).first()
