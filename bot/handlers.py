@@ -68,13 +68,13 @@ class CommandHandlers:
             )
             
             if is_admin:
-            	message += (
-            	    "\n\n*👑 أوامر المشرف:*\n"
-            	    "• /admin - لوحة المشرف\n"
-            	    "• /stats - إحصاءات النظام\n"
-            	    "• /broadcast - إرسال رسالة للمستخدمين"
-            	)
-            	
+                message += (
+                    "\n\n*👑 أوامر المشرف:*\n"
+                    "• /admin - لوحة المشرف\n"
+                    "• /stats - إحصاءات النظام\n"
+                    "• /broadcast - إرسال رسالة للمستخدمين"
+                )
+                
         else:
             message = (
                 "👋 *أهلًا بك في Tonpo Bot!*\n\n"
@@ -91,10 +91,10 @@ class CommandHandlers:
                 message += "\n\nتم فتح رابط إحالة؛ سيُحفظ مصدره عند إكمال التسجيل."
             
             if is_admin:
-            	message += (
-            	    "\n\n*👑 لديك صلاحية المشرف.*\n"
-            	    "استخدم /admin لفتح لوحة المشرف (لا يلزم التسجيل)."
-            	)
+                message += (
+                    "\n\n*👑 لديك صلاحية المشرف.*\n"
+                    "استخدم /admin لفتح لوحة المشرف (لا يلزم التسجيل)."
+                )
         
         from bot.keyboards import get_mini_app_keyboard
         await update.message.reply_text(

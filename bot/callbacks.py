@@ -296,6 +296,7 @@ class CallbackHandlers:
                     await query.edit_message_text("❌ لم يتم العثور على الصفقة.")
                     
             except Exception as e:
+                logger.warning("Position action failed: %s", type(e).__name__)
                 await query.edit_message_text("❌ تعذر تنفيذ الإجراء. يرجى المحاولة لاحقًا.")
         
         elif action == 'close_all':
@@ -309,7 +310,6 @@ class CallbackHandlers:
                 return
 
             # Close all positions
-            from bot.keyboards import get_confirmation_keyboard
             
             await query.edit_message_text(
                 "هل أنت متأكد من رغبتك في إغلاق جميع الصفقات؟",
@@ -398,7 +398,7 @@ class CallbackHandlers:
                             closed += 1
                         else:
                             failed += 1
-                    except:
+                    except Exception:
                         failed += 1
                 
                 await query.edit_message_text(
@@ -406,6 +406,7 @@ class CallbackHandlers:
                 )
                 
             except Exception as e:
+                logger.warning("Close all positions failed: %s", type(e).__name__)
                 await query.edit_message_text("❌ تعذر تنفيذ الإجراء. يرجى المحاولة لاحقًا.")
         
         elif action == 'delete_account':

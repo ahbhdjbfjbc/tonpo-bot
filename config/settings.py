@@ -136,7 +136,7 @@ class Settings(BaseSettings):
             # Strip inline comments before any parsing
             v = v.split('#')[0].strip()
             if not v:
-            	return []
+                return []
             # Try to parse as JSON first
             try:
                 return json.loads(v)

@@ -103,7 +103,7 @@ class MonitoringService:
         if self.cache.redis_client:
             try:
                 services['redis'] = 'healthy' if self.cache.redis_client.ping() else 'unhealthy'
-            except:
+            except Exception:
                 services['redis'] = 'unhealthy'
         else:
             services['redis'] = 'not_configured'

@@ -14,7 +14,7 @@ def test_pyproject_includes_web_package_and_runtime_dependencies():
     for dependency in ("fastapi", "uvicorn", "httpx", "python-multipart", "slowapi"):
         assert any(item.lower().startswith(dependency.lower()) for item in dependencies)
     assert sum(item.lower().startswith("pyjwt") for item in dependencies) == 1
-    assert {"pytest==8.3.2", "pytest-asyncio==0.24.0", "pytest-cov==5.0.0"}.issubset(dev_dependencies)
+    assert {"pytest==9.0.3", "pytest-asyncio==1.3.0", "pytest-cov==5.0.0"}.issubset(dev_dependencies)
     assert "services" in project["tool"]["coverage"]["run"]["source"]
 
 

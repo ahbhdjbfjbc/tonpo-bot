@@ -342,7 +342,7 @@ class RegistrationHandler:
             # Custom risk input
             try:
                 risk = parse_risk_percent(update.message.text)
-            except:
+            except Exception:
                 minimum, maximum = risk_limits_percent()
                 await update.message.reply_text(
                     f"❌ نسبة مخاطرة غير صالحة. أدخل رقمًا بين {minimum:g} و{maximum:g}:"

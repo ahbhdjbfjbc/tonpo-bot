@@ -173,7 +173,7 @@ class AdminHandler:
         
         keyboard = get_admin_keyboard()
         if update.callback_query:
-        	await update.callback_query.edit_message_text(
+                await update.callback_query.edit_message_text(
                 dashboard_text,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=keyboard
@@ -188,11 +188,11 @@ class AdminHandler:
         return ADMIN_MAIN
         
     async def cancel(self, update: Update, context: CallbackContext) -> int:
-    	"""Cancel admin conversation"""
-    	await update.message.reply_text("👑 انتهت جلسة المشرف.")
-    	context.user_data.pop('pending_action', None)
-    	context.user_data.pop('selected_user', None)
-    	return ConversationHandler.END
+        """Cancel admin conversation"""
+        await update.message.reply_text("👑 انتهت جلسة المشرف.")
+        context.user_data.pop('pending_action', None)
+        context.user_data.pop('selected_user', None)
+        return ConversationHandler.END
     
     async def handle_menu(self, update: Update, context: CallbackContext) -> int:
         """Handle admin menu selections"""
@@ -1664,7 +1664,7 @@ class AdminHandler:
                 await query.edit_message_text("تعذر تنفيذ الإجراء. حاول مجددًا.")
             except Exception:
                 pass
-    	
+        
     def get_states(self):
         """Return conversation states using bound instance methods"""
         # Defined after class so AdminHandler is in scope
