@@ -104,6 +104,9 @@ jobs:
       - name: Upgrade an empty database to head
         env:
           PYTHONPATH: .
+          # Runtime settings validation requires realistic formats (not real secrets).
+          BOT_TOKEN: '123456789:CI_fake_token_for_migrations_only_000'
+          ENCRYPTION_KEY: 'J9OPzQ6sGhG2c2o2W5Z8m2bJ3rXk0Q6Yy1U4b7n3v8E='
         run: |
           python -m alembic upgrade head
           python -m alembic current | grep -q "(head)"
@@ -111,6 +114,8 @@ jobs:
       - name: Re-apply head (idempotent)
         env:
           PYTHONPATH: .
+          BOT_TOKEN: '123456789:CI_fake_token_for_migrations_only_000'
+          ENCRYPTION_KEY: 'J9OPzQ6sGhG2c2o2W5Z8m2bJ3rXk0Q6Yy1U4b7n3v8E='
         run: python -m alembic upgrade head
 
   quality:
