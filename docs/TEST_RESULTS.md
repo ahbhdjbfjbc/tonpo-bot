@@ -32,7 +32,7 @@ MetaDocker الحقيقي، MT5 terminal، broker Demo، TradingView live webhoo
 | الفحص | الحالة | النتيجة |
 |---|---|---|
 | `./.venv/bin/pytest --disable-warnings --tb=short tests/` | PASS | **299 passed, 300 warnings** في 14.62 ثانية؛ التحذيرات تشمل datetime legacy وتحذيرات تبعيات |
-| `./.venv/bin/alembic heads` | PASS | رأس واحد: `025_system_metrics_schema_alignment` |
+| `./.venv/bin/alembic heads` | PASS | رأس واحد: `025_system_metrics_alignment` |
 | `alembic upgrade head --sql` على PostgreSQL | PASS | توليد SQL لكل السلسلة حتى revision 025 |
 | اختبار migration 025 على SQLite legacy schema | PASS | backfill، `created_at NOT NULL`، تبديل الفهارس، واختبار downgrade العكسي |
 | backup/restore smoke باستخدام GPG الحقيقي وstubs لأوامر PostgreSQL | PASS | تشفير/فك تشفير، checksum بعد النقل، permissions، إخفاء URLs عن العمليات التابعة، ورفض قاعدة غير فارغة |

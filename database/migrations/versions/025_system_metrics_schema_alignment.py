@@ -6,7 +6,7 @@ Revises: 024_trade_channel_publications
 from alembic import op
 import sqlalchemy as sa
 
-revision = "025_system_metrics_schema_alignment"
+revision = "025_system_metrics_alignment"
 down_revision = "024_trade_channel_publications"
 branch_labels = None
 depends_on = None

@@ -273,3 +273,57 @@ class TestHealth:
         assert r.status_code == 200
         assert r.json()["status"] == "ok"
         assert r.json()["dry_run"] is True
+
+
+def test_tradingview_secret_in_json_body_is_accepted_for_real_alerts(monkeypatch):
+    """TradingView cannot send custom headers; the secret must be accepted from the body."""
+    from fastapi import HTTPException
+    from web.api import webhooks
+
+    monkeypatch.setattr(webhooks.settings, "ENABLE_WEBHOOKS", True, raising=False)
+    monkeypatch.setattr(webhooks.settings, "TRADINGVIEW_WEBHOOK_SECRET", "body-secret-value-123", raising=False)
+    seen = {}
+
+    def fake_auth(secret):
+        seen["secret"] = secret
+        return secret == "body-secret-value-123"
+
+    monkeypatch.setattr(webhooks, "_authenticate", fake_auth)
+    monkeypatch.setattr(webhooks, "_check_rate_limit", lambda key: None)
+
+    def stop_after_auth(db):
+        raise HTTPException(status_code=503, detail="stop")
+
+    monkeypatch.setattr(webhooks, "_target_user_ids", stop_after_auth)
+
+    import asyncio
+    import json as _json
+
+    class FakeRequest:
+        client = None
+
+        def __init__(self, body):
+            self._body = body
+
+        async def body(self):
+            return self._body
+
+    good = _json.dumps({"secret": "body-secret-value-123", "symbol": "EURUSD"}).encode()
+    try:
+        asyncio.run(webhooks.tradingview_webhook(FakeRequest(good), db=None, x_tradingview_secret=None))
+    except HTTPException as exc:
+        assert exc.status_code == 503  # authenticated, then stopped by fake
+    assert seen["secret"] == "body-secret-value-123"
+
+    bad = _json.dumps({"secret": "wrong", "symbol": "EURUSD"}).encode()
+    try:
+        asyncio.run(webhooks.tradingview_webhook(FakeRequest(bad), db=None, x_tradingview_secret=None))
+    except HTTPException as exc:
+        assert exc.status_code == 401
+    else:
+        raise AssertionError("wrong secret must be rejected")
+
+    try:
+        asyncio.run(webhooks.tradingview_webhook(FakeRequest(b"not json"), db=None, x_tradingview_secret=None))
+    except HTTPException as exc:
+        assert exc.status_code == 401

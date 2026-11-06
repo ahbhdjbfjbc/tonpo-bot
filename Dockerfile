@@ -22,8 +22,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p logs data
+# Create necessary directories and run as an unprivileged user
+RUN groupadd --system --gid 10001 tonpo \
+    && useradd --system --uid 10001 --gid tonpo --home-dir /app --shell /usr/sbin/nologin tonpo \
+    && mkdir -p logs data \
+    && chown -R tonpo:tonpo logs data
+USER tonpo
 
 # Run the application
 CMD ["python", "main.py"]

@@ -6,6 +6,8 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import hashlib
+import hmac
 import logging
 import asyncio
 import warnings
@@ -61,6 +63,12 @@ def _telegram_request() -> HTTPXRequest:
         # diagnostic showed that disabling it cannot reach Telegram here.
         httpx_kwargs={"trust_env": True},
     )
+
+
+def telegram_webhook_secret(bot_token: str) -> str:
+    """Derive a stable webhook secret (A-Z, a-z, 0-9) without extra configuration."""
+    return hmac.new(bot_token.encode(), b"tonpo-telegram-webhook", hashlib.sha256).hexdigest()
+
 
 class Bot:
     """
@@ -915,10 +923,13 @@ class Bot:
         """Start the bot — PTB manages the event loop entirely"""
         if settings.USE_WEBHOOK:
             self.application.run_webhook(
-                listen="0.0.0.0",
+                listen=settings.WEBHOOK_HOST,
                 port=settings.WEBHOOK_PORT,
                 url_path=settings.BOT_TOKEN,
-                webhook_url=f"{settings.WEBHOOK_URL}/{settings.BOT_TOKEN}",
+                webhook_url=f"{settings.WEBHOOK_URL.rstrip('/')}/{settings.BOT_TOKEN}",
+                # Telegram echoes this value in X-Telegram-Bot-Api-Secret-Token;
+                # PTB rejects webhook requests that do not carry it.
+                secret_token=telegram_webhook_secret(settings.BOT_TOKEN),
             )
         else:
             self.application.run_polling(

@@ -29,7 +29,7 @@ def test_system_metrics_orm_contract_matches_alignment_migration():
     assert indexes["idx_metric_name_date"] == ("metric_name", "created_at")
 
     alignment = _load_migration("025_system_metrics_schema_alignment.py")
-    assert alignment.revision == "025_system_metrics_schema_alignment"
+    assert alignment.revision == "025_system_metrics_alignment"
     assert alignment.down_revision == "024_trade_channel_publications"
 
 
@@ -45,3 +45,10 @@ def test_irreversible_migration_downgrades_fail_loudly(filename, message):
     migration = _load_migration(filename)
     with pytest.raises(RuntimeError, match=message):
         migration.downgrade()
+
+
+def test_all_revision_ids_fit_alembic_version_column():
+    """alembic_version.version_num is VARCHAR(32); longer IDs fail on PostgreSQL."""
+    for path in sorted(MIGRATIONS.glob("[0-9]*.py")):
+        module = _load_migration(path.name)
+        assert len(module.revision) <= 32, path.name
