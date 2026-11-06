@@ -1,0 +1,28 @@
+# Secrets must never be baked into the image; Compose injects them via env_file.
+.env
+.env.*
+!.env.example
+*.backup-passphrase
+*.dump.gpg
+*.dump.gpg.sha256
+
+# VCS, caches and local tooling
+.git
+.github
+**/__pycache__
+**/*.py[cod]
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+.venv
+venv
+
+# Not needed at runtime
+artifacts
+docs
+tests
+logs
+*.log

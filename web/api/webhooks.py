@@ -174,7 +174,20 @@ async def tradingview_webhook(
     # disabled ingress does not disclose whether its secret is configured.
     if not bool(getattr(settings, "ENABLE_WEBHOOKS", False)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not _authenticate(x_tradingview_secret):
+    raw = await request.body()
+    if not raw or len(raw) > 32_768:
+        raise HTTPException(status_code=400, detail="Invalid body size")
+    try:
+        data: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        data = None
+
+    # TradingView alerts cannot set custom HTTP headers, so the shared secret
+    # may travel in the JSON body as "secret". The header remains supported
+    # for other integrations and takes precedence when present.
+    body_secret = data.pop("secret", None) if isinstance(data, dict) else None
+    provided_secret = x_tradingview_secret or (body_secret if isinstance(body_secret, str) else None)
+    if not _authenticate(provided_secret):
         logger.warning("TradingView webhook unauthorized from %s", request.client.host if request.client else "unknown")
         raise HTTPException(status_code=401, detail="Unauthorized")
     _check_rate_limit(_client_key(request))
@@ -182,13 +195,8 @@ async def tradingview_webhook(
     if not target_users:
         raise HTTPException(status_code=503, detail="No active subscribers are configured")
 
-    raw = await request.body()
-    if not raw or len(raw) > 32_768:
-        raise HTTPException(status_code=400, detail="Invalid body size")
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="Malformed JSON") from exc
+    if data is None:
+        raise HTTPException(status_code=400, detail="Malformed JSON")
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Payload must be a JSON object")
     forbidden_identity = {"user_id", "account_id", "subscription_id"}.intersection(data)

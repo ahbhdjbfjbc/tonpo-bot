@@ -30,6 +30,9 @@ logger = logging.getLogger("web.run")
 def main():
     import uvicorn
     from config.settings import settings
+    from utils.log_redaction import configured_secrets, install_secret_redaction
+
+    install_secret_redaction(configured_secrets())
 
     host = os.getenv("WEB_HOST", "0.0.0.0")
     port = int(os.getenv("WEB_PORT", "8000"))

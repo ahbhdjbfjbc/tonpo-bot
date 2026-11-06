@@ -33,3 +33,33 @@
 ## اختبارات مطلوبة
 
 Payload ناقص/مشوه/كبير، سر خاطئ، replay، signal ID مكرر، timestamp قديم، symbol غير معروف، order type غير مدعوم، اشتراك منتهٍ، ومحاولة الوصول إلى حساب مستخدم آخر.
+
+## إعداد تنبيه TradingView الفعلي
+
+TradingView لا يسمح بإضافة Headers مخصصة للطلب، ويرسل نص رسالة التنبيه فقط. لذلك يقبل الخادم كلمة السر داخل JSON في الحقل `secret`. يبقى الـ Header `X-TradingView-Secret` مدعومًا للتكاملات الأخرى، وله الأولوية إذا أُرسل.
+
+- Webhook URL: `https://<your-domain>/api/webhooks/tradingview` (يقبل TradingView المنفذين 80 و443 فقط، ولا يدعم IPv6).
+- في `.env`: `ENABLE_WEBHOOKS=true`، و`TRADINGVIEW_WEBHOOK_SECRET=<قيمة عشوائية طويلة>`، و`TRADINGVIEW_TELEGRAM_ID=<معرّف تيليجرام للحساب المستهدف>`، و`TRADINGVIEW_SYMBOL_MAP={"EURUSD":"EURUSD"}`.
+- ضع في حقل Message للتنبيه:
+
+```json
+{
+  "secret": "PASTE_TRADINGVIEW_WEBHOOK_SECRET",
+  "id": "{{ticker}}-{{interval}}-{{timenow}}",
+  "symbol": "{{ticker}}",
+  "action": "{{strategy.order.action}}",
+  "stop_loss": 1.0500,
+  "take_profit": 1.1000,
+  "timestamp": "{{timenow}}"
+}
+```
+
+يُحذف حقل `secret` قبل التحقق من صحة الإشارة، ولا يُحفظ ولا يُسجَّل.
+
+نتيجة الاختبار الحي على خادم محلي بوضع `TRADING_DRY_RUN=true`: الإشارة الصحيحة قُبلت وحُفظت. ورُفضت الحالات التالية برموز الاستجابة الموضحة:
+
+- تكرار المعرّف نفسه: 409.
+- كلمة سر خاطئة: 401.
+- توقيت قديم: 400.
+- رمز غير معرّف: 400.
+- حقل `user_id` داخل الطلب: 400.
